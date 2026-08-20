@@ -1,0 +1,1016 @@
+{
+  "description": "Top 100 highest-level inline PR review comments by kberezin-nshl (Kirill) in nutshelllabs/oak — his most doctrine-dense, generalizable review feedback, selected from 2,336 scraped comments (1,172 significant, then ranked by repo-wide doctrine value; score is that 0-100 rank). own_pr=true marks author-side replies on his own PRs. Full significant corpus: comments-all.json.",
+  "generated": "2026-08-06",
+  "total_comments_scraped": 2336,
+  "curation": {
+    "excluded_as_outdated": [
+      {
+        "id": 1211581665,
+        "pr": 336,
+        "reason": "Kai (2026-08-06): the 2023 byob messaging/EventDef type-safety discussion is outdated; the general type-safety principle survives on recent evidence but do not cite this comment"
+      }
+    ]
+  },
+  "comments": [
+    {
+      "id": 2767698685,
+      "pr": 14416,
+      "own_pr": false,
+      "created": "2026-02-05T08:23:59Z",
+      "path": "proto/nutshell/iris/proto/iris.proto",
+      "in_reply_to": null,
+      "body": "(Leaving just one comment here instead of many tiny ones)\r\n\r\nI am not a huge fan of push-backs but I have to do it here. There are a couple of reasons why:\r\n\r\n### Too many unrelated things in one PR\r\n\r\nTo me, this PR looks like a couple of different things squashed together (even literally in a single commit!):\r\n1. There are changes to the PnL statement that seem reasonable to me and which I want to merge, but I can not, because\r\n2. There are changes to how we produce outputs in an artifact template feature, which I actively worked on and had a clear vision on how to implement this, and this implementation doesn't match the design that I already have in my head.\r\n\r\n### Why your proposed approach won't work\r\n\r\nI'll try to lay out things from the most objective to the most opinionated (and opinionated doesn't mean those are not valid):\r\n1. You're misinterpreting what `DocumentsManifestNode` is doing. It is not an arbitrary / internal manifest format, this manifest needs to be readable by GCS Storage Transfer Jobs and in the form that you've converted it, it won't. \r\n    The problem here is that mockman's `LocalDevMockStorageTransfer` is a no-op so we can't see if provided manifest is broken. I knew this will backfire when it was first introduced a year ago but I didn't push back to have a proper implementation back then. \r\n    And secondly, we don't have a separate integration test that tests artifact delivery to gs:// destination, because it is exactly the same nodes (until you introduced this metadata thing) that retention job uses, therefore there's no need to test them twice.\r\n2. `ProtobufTemplate` is an unused dead-code that we should've just deleted long time ago, but didn't for some reason. The only \"template engine\" that we use and should use going forward is CEL expressions. CEL can do everything that this template thing can, and way more. There's no reason to introduce anything new alongside CEL.\r\n    Admittedly, CEL is harder to write for humans, but who said humans should write it? We can build any UI that we want that will help us build any CEL expression we want with a simple, wizard/builder like UX and \"pro mode\" to manually edit CEL if we want to.\r\n3. The directory structure for Artifact Delivery and the PDF output structure of the Document Generator Job is two completely different things that should have their own, independent configuration. \r\n    We want and can make them play nicely with one another, but there can be so many different use-cases: like one document type is only delivered to S3 bucket, but another document type for the same tenant is print-only, and the layout we may want can be wildly different. \r\n    It's hard to foresee what we'll need, as usual, but more flexibility upfront is almost always a better approach than jamming things into the same global config. \r\n    Another thing that usually works well is that \"if we can get away with hardcoding something today, we should leave it hardcoded\". Because tomorrow you won't need to solve a data migration problem. Output document paths are hardcoded in DocGen job now. Does it work? Yes. Does it solve today's problem? Yes. Do we want to change it tomorrow? Maybe. Do we know _what problem_ are we going to solve tomorrow? No. See? This means we shouldn't do it, if we don't know what we're doing.\r\n4. `DocumentsManifestNode` again. Even if we assume there's no issue with GCS, I can tell it's just two different nodes squashed into a single node. Generally speaking, you have two modes: one \"legacy\" and one \"with metadata\" that are _wildly_ different from one another. If that is the case, we should always just introduce a new node type, _especially_ when you see that `DocumentManifestNode` is reused in different workflows. You did see it, right? 😉 \r\n    And then workflow def can decide which node to use based on `hasPathTemplate` in the workflow's input with \r\n    ```\r\n    .thenOnlyIf(hasPathTemplate, new NodeBuilder(NewShinyKaisNode.class))\r\n    .thenOnlyIf(!hasPathTemplate, new NodeBuilder(LegacyManifestNode.class))\r\n    ```\r\n\r\nThese are the main points I wanted to make, there are other comments that I can make here in this PR but they are either irrelevant if the 4 points above are addressed or just not worth paying attention today.\r\n\r\nI don't think this time is wasted, though, so I don't want you to feel badly about this work, I truly believe the only way to learn is to go and hack things, and I hope you learned a lot by working on this on your own and by then reading this comment. However, this can't go in.\r\n\r\nMy proposed next steps:\r\n1. Extract PnL related things into a separate PR\r\n2. Close this PR and let me take on this tomorrow, on Friday (I probably won't have enough time for this today as I have some plans mid-day).",
+      "score": 96
+    },
+    {
+      "id": 1860178426,
+      "pr": 7434,
+      "own_pr": true,
+      "created": "2024-11-27T08:13:46Z",
+      "path": "docs/workflows_101.md",
+      "in_reply_to": 1859062602,
+      "body": "> Is ingest idempotent then? Seems like it isn't (which totally makes sense).\r\n\r\nIt is. It has several mechanisms to provide that property:\r\n* first, it produces a stable job name, so that even in case of some PubSub double-delivery, for example, it will make 2 requests to Dataflow, but the second one returns 409.\r\n* then, even if it happens (and that actually did happened in M1 prod, when we produced our very first Aug statements, and I still don't know what the root cause was), that after completion of one ingest job another one is requested immediately, because the job itself produces stable output file names, it will overwrite the output of the first job and everything downstream will work correctly.\r\n\r\nAs I said, statement \"Node is idempotent\" is not equivalent to \"Workflow is idempotent\".\r\n\r\nHere's the simplified example of a workflow, where each node itself is idempotent, but the whole thing is definitely not:\r\n* `root` node receives an input with a number N\r\n* Node `A` produces N files with stable filenames \"1.txt\", \"2.txt\", ... \"N.txt\", and puts it into a bucket `work-queue`. After that Node `A` succeeds.\r\n* Then for each file in `work-queue`, Node `B` reads its metadata, then deletes it, and if delete is successful, Node `B` writes the file creation timestamp from that metadata to the Spanner table `event`.\r\n\r\n`A` is easily idempotent: it may even not check if file `X.txt` exists prior to writing, it doesn't matter. But let's imagine it does check it, so it produces literally 0 side effects if it runs concurrently in two different threads.\r\n`B` is also idempotent, because even if triggered twice from two different threads after `A` completes, it will still only delete N files and will write only N events, because if things happen concurrently only 1 delete operation succeeds per file.\r\n\r\nHowever, once the workflow is done, if you start it over, you'll end up with twice as many events in your `event` table. \r\n\r\nI can even give you a sillier example: Node A writes something with stable IDs based on workflow own ID to Spanner, then Node B drops the database. 😄 If you rerun everything Node A will crash because DB doesn't exist, and workflow will fail.\r\n\r\nBy the way, it is very easy to make any workflow \"workflow-level-idempotent\". How? Polyflow can check if there is a record in `workflow_history` table with this workflow's ID and status `SUCCESS`. If yes, just mark all the nodes as successful and quit 😆 This is silly, and this is not our goal.\r\n\r\nBy requiring idempotency here, we're not asking that \"any node can be re-run at any time, even 100 days later, and everything should be fine\", we're asking:\r\n\"Look, due to the nature of polyflow, it may happen that _this node_'s execution will happen twice because:\r\n* two different threads / processes can easily start executing it simultaneously,\r\n* or an unexpected exception will be thrown in the middle of execution and PubSub will redeliver the message in 5 secs\r\n* or something along those lines\r\n\r\nso please make sure you don't duplicate / multiply things if that happens.\"\r\n\r\n> Are the following statement correct and in the spirit of what you are writing:\r\n\r\nI think in principle it is still `MUST`, that what you should (huh? must? 😆) have in mind when you approach writing a new node. I don't want to give a room for thought here, even as I say in practice nobody cares that _some nodes_ are not. But this is an exception, not the rule.",
+      "score": 96
+    },
+    {
+      "id": 3497396989,
+      "pr": 17631,
+      "own_pr": false,
+      "created": "2026-06-30T08:47:40Z",
+      "path": "_proposals/IRIS-4149-bump-proposal.md",
+      "in_reply_to": null,
+      "body": "This testing strategy is wrong. I assume that's the reason why there's an interface `BumpServerProtocol` which I called out on above, because there's a test that re-implements it in-memory. This test is useless.\n\nThis is called mocking and we must never use mocks in testing. There's literally _nothing_ that prevents us to stand up a real gRPC server in a unit-test and call it within a unit-test.\n\nMore than that, I would say we don't need an integration test. Bump will be naturally tested in an integration test when we migrate TINm to Bump.",
+      "score": 96
+    },
+    {
+      "id": 2300580041,
+      "pr": 10463,
+      "own_pr": false,
+      "created": "2025-08-26T10:44:12Z",
+      "path": "iris/service/irisflow/src/main/java/nutshell/iris/irisflow/persistence/ClientInfoDaoSpanner.java",
+      "in_reply_to": null,
+      "body": "We _NEVER_ hard delete data from Spanner. Never. \nThe only allowed occurrence of `\"DELETE FROM` should be in the test code.",
+      "score": 96
+    },
+    {
+      "id": 3665928114,
+      "pr": 18131,
+      "own_pr": false,
+      "created": "2026-07-28T13:33:26Z",
+      "path": "_proposals/IRIS-4350-ustax-ingest-version.md",
+      "in_reply_to": null,
+      "body": "We talked about this yesterday, we need to start making progress. In order for that to happen, we must learn how to reduce scope.\n\nSingleton enforcement is important, but it is not important now. \n\nAs you think about your task, you'll be constantly seeing a room for improvement and / or things left to do. This is great. But that should be an iterative process, not an attempt to write a gigantic prompt / docs that implements / describes you a full universe.\n\nBreakdown things into steps:\n* Can the feature work and be useful without having solid singleton guarantees?  Yes. Then set singleton aside (create a ticket for it)\n* Can the feature work and be useful without coercion? Yes. Then set it aside (create a ticket for it).\n    * More than that, since we're talking about _versioning_ here, why worry about \"data collector\" (which I assume you call coercion here) at all? We have a task to create something that takes already coerced data and calculates versioned set of records. Focus on this, forget about how coercion works (I mean not literally, but exclude it from this task).\n* Can the feature work and be useful without sharding support? (I don't know, by the way, why do we need it here)... \n\nHopefully, you get my point. We keep jumping around this huge document because it tries to describe the end state of the universe upfront. Not going to happen. That's why proposals should be basically prompts instead of waterfall-like documentation of the end state that we'll never achieve.\n\nIn this task, I want to see:\n* acknowledgement of the assumption that we have a set of customer's data fully converted to our data models (pretending it's there for us) with a description of how it looks like\n* high-level overview of how versioning is going to work (\"explain me like I am five\"):\n    * human will click a button on the admin UI (or wherever) that is called \"ingest\"\n    * there will be a new workflow that will start within a new Go app called \"blah\"\n    * this workflow will take latest customer data and compare it with latest ingested versioned data, \n* then, down below there should be implementation details that explain how things should be implemented exactly:\n    * workflow shape, how many nodes there are, what are they, etc\n    * versioning algorithm\n    * BQ queries\n    * where the button is on the UI \n    * how and if sync should change (this is IMPORTANT)\n\nSync can't be \"the next step\". It is part of the iteration:\n* currently sync reads hardcoded files in the repo. Great, already better than what was hardcoded in the code. \n* now those hardcoded files should be gone, we should be able to run ingest and sync should be able to read from ingest-produced files. \n* in order for ingest to work, new hardcoded files should appear that contain only data collected (coerced) records, since we don't have a data collector (coercion) step yet\n\nSee the pattern? We moved the \"hardcoded\" boundary one step away once again. And we should do it until we reach customer's data and/or datagen.",
+      "score": 95
+    },
+    {
+      "id": 2541721287,
+      "pr": 12379,
+      "own_pr": false,
+      "created": "2025-11-19T12:04:44Z",
+      "path": "java/testing/integration/iris/src/test/java/nutshell/iris/UspsSecureDestructionIntTest.java",
+      "in_reply_to": null,
+      "body": "First and foremost, the correct workflow definition id is `SecureDestructionWorkflowDef.INSTANCE.id()`. But it doesn't matter, because....\n\nThe golden rule of Integration and End-to-end tests: they should never depend on the service's code.\n\nThe reason behind this is that integration tests verify among other things the API contracts that were established. Workflow definition ID is the part of the API, changing it in the service code will lead to widespread problems elsewhere even though all the unit-tests will pass because they rely on the compiled code. If you changed the compiled code, unit-test would naturally just use that new compiled code and everything will match / pass.\n\nIn integration tests, it is _extremely_ important that we always use string literals in the places like this, so whenever somebody (either intentionally or by accident) changes the workflow definition ID (e.g by moving it to another package without overriding `id()` method), this integration test will catch that and we all will be thankful.\n\nSo (a) please remove the dependencies that you've added to the integration test and (b) use string literal here as the worklfow defintion id",
+      "score": 95
+    },
+    {
+      "id": 2791928864,
+      "pr": 14717,
+      "own_pr": false,
+      "created": "2026-02-11T08:08:36Z",
+      "path": "java/polyflow/iris/src/main/resources/ustax/reporting/polymarket/irs_validation_errors.sql",
+      "in_reply_to": 2790766640,
+      "body": "It should be derived from the document date for sure\r\n\r\n> not sure how to test locally since there is a conflict with datasets since we have multi-tenant\r\n\r\nExactly what Kai said, you're free to edit your Tiltfile, by flipping envvars there you get instant service restarts, you don't even need to bring the thing down and up again. I am sorry, but this just sounds like an excuse to me\r\n\r\n> You can test locally by running the report against a polymarket job. But it won't have interesting results.\r\n\r\nIt doesn't matter if it's interesting or not, what matters that it works. It's fine to test it by running in real BQ, but you don't test substitutions, you don't test that you don't freak out BQ emulator, you don't test that those are sent correctly, etc.\r\n\r\nLocal testing is of UTMOST importance. Yesterday, I wasted ~2 hours trying to test your PR @KnowItAllKing because BQ reports were completely broken locally. That's because you never ran them locally @asheragy \r\n\r\nAlso, _ALL_ reports _MUST_ have unit-tests. These are insanely complicated queries. What makes us think that they work correctly when we ship them? If they don't, how do we know that we're fixing them right when we'll fix them?\r\n\r\nIf we think that by _RUSHING_ the PRs in and straight into prod, we're buying time, we're wrong. We're losing a shit ton of time trying to rush things. Spending an extra hour on testing saves MANY hours of debugging / fixing downstream. As I said, yesterday (Tue Feb10) I could've helped elsewhere and done something useful, instead I've been fixing BQ reports in localdev, which was SO HARD to do, because there were no unit-tests and my dev loop was awful.\r\n\r\nWe have test data in the collector, we have Big Query initializer, we have everything ready to just ask Codex to add unit tests for each node and it'll be done in 10 minutes.",
+      "score": 94
+    },
+    {
+      "id": 2730685224,
+      "pr": 13924,
+      "own_pr": true,
+      "created": "2026-01-27T07:48:16Z",
+      "path": "go/nut/iris/aether/documents_v3.go",
+      "in_reply_to": 2729766528,
+      "body": "Great question. I think it's not an easy one.\r\n\r\nIn order to answer this question, we should first ask ourselves, what does this function actually do?\r\nTo me, the right answer to that question is\r\n* it makes sure that we get the right documents from ES according to the provided request.\r\n\r\nNote that I didn't say \"it construct elasticsearch request of a certain shape\". There's potentially infinite amount of ES requests that produce exactly the same result, right? So are we interested in the request or in the result?\r\n\r\nIn my opinion, once again, I am interested in the result. Which means that the ultimate unit-test that I want to have is:\r\n* by sending certain API request (not ES request!) I want to be sure that I get _certain_ documents back as a result\r\n\r\nThat's why this function is not being tested _directly_, it is being tested indirectly: see `documents_test.go` (I've added a lot more test-cases to `TestSearchDocuments` to reinforce my point here, so thank you for raising concerns!!!)\r\n\r\nAnother benefit that such an approach brings is that I am now free to refactor the code and rewrite the ES query if I find some more optimized or elegant way of querying the same stuff, without updating any tests, more than that, existing tests _ensure_ that if I make a mistake in my refactor, it'll be caught. Whereas if I only had a unit-test that verified certain ES query shape, I wouldn't be able to verify if my new code actually works the same way as previous code.\r\n\r\nTL;DR:\r\n* unit-tests that you proposed are _WAY BETTER_ than having no tests at all, don't get me wrong\r\n* however, I think there's a step forward that you can make to improve upon that approach and have our business expectations validated instead\r\n* which in turn liberates us in terms of refactoring later down the road\r\n\r\nP.S.: there's still value in having pure unit-tests that check that we produce certain shape of an ES query, but that is not necessarily about the filters. It may be some technical detail, like do we provide a correct \"preference\" string (the \"preference\" string in ES query parameters ensures that we hit exactly the same shard every time, so that our results are stable). There's no way to validate that we provide the right preference string just by looking at the ES query results in our unit-tests in `documents_test.go`, so the only option to ensure that is to have the unit-test of `buildDocumentsSearchQuery`\r\n\r\nP.P.S: but that raises a new question, are we 100% confident that `buildDocumentsSearchQuery` is called every time we call SearchDocuments endpoint? 😉 ",
+      "score": 93
+    },
+    {
+      "id": 1753455829,
+      "pr": 6074,
+      "own_pr": false,
+      "created": "2024-09-11T07:48:41Z",
+      "path": "iris/smoke-test/src/test/java/nutshell/iris/IrisEndToEndTest.java",
+      "in_reply_to": 1753213156,
+      "body": "Just to clarify: there is nothing _wrong_ with testing this way, it works and it really verifies that the code is correct. I totally see how it can be easier to do this as you develop this.\r\n\r\nHowever, it's not a one-time run, it will run for _every single PR and E2E test_ going forward, so the cost of each integration test is extremely high. Next time you'll need to make a little change to `Emailer` code, you will have to run E2E test to verify you didn't break anything on each change, making your devloop super loose.\r\n\r\nAt the same time, the cost of running a unit-test is extremely low. Simple emailer test / assertion adds virtually 0 additional costs in terms of both runtime and actual $$$. And the devloop becomes super tight as well.\r\n\r\nI remember back in a day there was 0 unit-tests in CDC service, literally. None. Everything was unnecessarily tested in integration tests. Not only it made a catastrophic impact to our CI build runtimes, like at some point 30 minutes per branch was a norm some time in January, but also when I started making changes to CDC, it was a huge pain in the ass to develop as I had to re-run localdev + int-test on each change. \r\n\r\nWe expect emailer to get a lot more complex as it should support double deliveries and stuff like that. Making a bet on integration test will backfire, that's why I am trying to be so diligent and to put stress on the importance of it.\r\n\r\nI have created [a ticket](https://nutshelllabs.atlassian.net/browse/IRIS-2043) to follow this up and assigned it to you @asheragy \r\n",
+      "score": 93
+    },
+    {
+      "id": 3354426414,
+      "pr": 17214,
+      "own_pr": true,
+      "created": "2026-06-04T08:02:37Z",
+      "path": "go/nut/iris/taxui/grpc/service.go",
+      "in_reply_to": 3352002284,
+      "body": "I encourage you to study the implementation more carefully.\r\n\r\nRecipient + list of accounts + list of statements currently are all coming from literally single product story SQL query, so it doesn't make sense to separate them into 3 calls. Then each account info (number of forms and submission state) is another query. So client makes 1 details RPC call followed by N account RPC calls.\r\n\r\nOn top of that, in the current form and shape it is not feasible to extract statements across scopes without scanning the whole product table, which we won't do, obviously. Once we get CDC+ES in place, things may change, but even then there's plenty of opportunities to fetch all the data we need in one query.\r\n\r\nYour proposal to separate the calls make sense from the FE developer standpoint though. And that's how we used to think about these things before. And we had a lot of issues and discussions and arguing about that, because FE devs invented API that makes sense from the FE standpoint, but then implementation details on the BE oftentimes made it super inefficient to provide the data that way. And we had to find compromises, we had to convince one party or another which shape or form is better, etc. \r\n\r\nThankfully, these days are now gone. FE implementation is a 10 min job for Codex. API changes are 2 min job for Codex. We can optimize for the implementation detail, we can make it an efficient set of queries. And once implementation details change (i.e we go from Spanner queries to ES queries), we change the API. Easy peasy.",
+      "score": 93
+    },
+    {
+      "id": 2925401741,
+      "pr": 15421,
+      "own_pr": true,
+      "created": "2026-03-12T15:17:25Z",
+      "path": "docs/proposals/20260312_proteus.md",
+      "in_reply_to": 2924148046,
+      "body": "We talked about it already. The goal is to feed the proposal into LLM practically without any change. It's not for humans to consume, I mean it certainly is, because we need to discuss it and reason about it, but the end consumer is going to be LLM. Chris already mentioned that in an ideal world this PR will be merged and auto-trigger an LLM somewhere in Cloud that'll start implementing it or something.\n\nI want Codex to one-shot this whole thing, _including the UI_.\n\nI only need to get rid of references to Milestone 2, but it also was a lesson for me too, don't mix up things in a single proposal. One proposal = one complete feature = one prompt. \n\nIt'll probably take several hours for Codex to complete this work, but this is how it should be done and my expectation is that it'll be quite successful in that.",
+      "score": 93
+    },
+    {
+      "id": 2265812142,
+      "pr": 10366,
+      "own_pr": false,
+      "created": "2025-08-11T06:37:44Z",
+      "path": "iris/tools/data-generator/datagen.py",
+      "in_reply_to": 2262123172,
+      "body": "I don't understand your comment, sorry. \n\nLet me shortly reiterate my point\n* Do we ship this file with the container? The answer is **YES** (I think you've just confirmed that yourself).\n* Since we ship the file with the container, we must use it. Period, end of story.\n\nIt works locally, therefore it should work in the container. If it doesn't, we should figure out WHY and fix. I think I am repeating this phrase over and over again and yet you're always trying to workaround things first instead of finding out the actual root cause.\n\nThis is not how we write software here at Nutshell. We may do it for SDH, but we never do it for our own products (unless there is a time pressure that forces us to, which is a rare occasion). \n\n\n\n",
+      "score": 93
+    },
+    {
+      "id": 2924375016,
+      "pr": 15421,
+      "own_pr": true,
+      "created": "2026-03-12T12:42:54Z",
+      "path": "docs/proposals/20260312_proteus.md",
+      "in_reply_to": 2924148046,
+      "body": "> but this section feels like a nice meaty block of text to give codex to build the UI we want\n\nThat is _exactly_ what it is and that is _exactly_ what we want our proposals to be.\n\n> maybe a quick magic patterns app using this description or some AI-generated mockup.\n\nWhat exactly prevented you from going to magic patterns / ChatGPT and ask for a mockup of this UI description? 😉 \n\n> something a reader can easily digest and then create a mental model of\n\n\"A reader can easily digest\" is not the goal here. It is actually never a goal, it's not an apple keynote and not a tiktok stream. Any technical idea _takes time_ to be digested. It is as important to invest time in reading and understanding other people's ideas as in writing down your own.\n\nOn a side note, we all should be able to participate in conversations about the design. I mean generally, not only UI/UX. It is quite an important skill in my book to be able to build your mental model from verbal descriptions. \n\nOtherwise, how one can meaningfully contribute to a brainstorming session in an architecture meeting if they can't pick up other people's ideas?",
+      "score": 92
+    },
+    {
+      "id": 3247283693,
+      "pr": 16771,
+      "own_pr": false,
+      "created": "2026-05-15T09:42:17Z",
+      "path": "java/job/iris/delivery/src/main/java/nutshell/iris/delivery/template/MailTemplate.java",
+      "in_reply_to": 3247012050,
+      "body": "Now it's much clearer. I am wondering, though, yet again, why isn't this PR a proposal?\r\nIt looks to me as if we need our own templating engine, do we not? \r\n\r\n* Why haven't you considered using Handlebars or Mustache for that? \r\n* Do we expect more variables further down the road? \r\n* How one can see all the available variables that are allowed to use? \r\n* What if I use a variable that is not supported like `{{definitely_does_not_exist}}` (pretty sure I can find the answer in unit-tests for that and pretty sure, yet again, the answer is that nothings would happen because LLMs don't like crashing and erroring).\r\n\r\nWithout a proposal, I am not sure if that was talked through or not at all, did we all agree that the naive substitution like the one that LLM implemented here is sufficient for now? If yes, why? Did we want to hack something quickly to show that we addressed their feedback quickly? Etc.\r\n\r\nEvery new feature that you bring to oak is full of design decisions. Not thinking about it is bad, letting LLM think about it for you is even worse.",
+      "score": 92
+    },
+    {
+      "id": 1906564721,
+      "pr": 7699,
+      "own_pr": false,
+      "created": "2025-01-08T06:55:51Z",
+      "path": "shared/lib/byob/src/main/java/nutshell/shared/byob/persistence/CloudStorage.java",
+      "in_reply_to": 1906555011,
+      "body": "No, it's not. It is still a \"production\" code, not a test code, even though it is only used locally.\r\nLeaking testing concerns into a production code (i.e the code that is under `src/main/java` folder, not `src/test/java` folder) is an extremely bad hygiene. \r\n\r\nWe have 100+ unit tests, and if each unit test updates a production file to support testing behaviour, not only that pollutes the code, it increases the chance that (a) you're not testing what you're supposed to be testing and (b) sooner or later that backfires in an unexpected way.\r\n\r\nAnd this one is a perfect example of (a). You're testing the wrong thing. The code never throws `MissingDocumentException` even though your assert statements says otherwise. You see an empty URI because your mocked code returns empty string. This renders the test meaningless.\r\n\r\nWhat you should do instead is update `GcsApiImpl` to return 404 for your \"nonexistent-bucket\", this way the exception would indeed be thrown and you'll be testing a correct codepath.",
+      "score": 92
+    },
+    {
+      "id": 2450788373,
+      "pr": 11853,
+      "own_pr": false,
+      "created": "2025-10-22T07:58:13Z",
+      "path": "java/job/iris/m1data/src/test/java/nutshell/iris/m1data/CreditCardTest.java",
+      "in_reply_to": 2449938995,
+      "body": "I agree with Andrew here, basically you actually NEVER should calculate expected values in unit-tests. That defies the purpose of it. All assertions should look like this:\n\n```\nassertEquals(1000, calculator.calculate());\n```\n\nSo in this scenario, it should look like\n\n```\nassertEquals(\"expected balance 100, got 200\", msg.getMessage())\n```\nbecause you know that data and you can pre-calculate the message.\n\nP.S.: don't take my \"never calculate expected values\" super-literally. There are legit cases where it is sensible, like if you generated random values as input to your code, you obviously must calculate the expected values.\n\nHowever, what you never should do is basically copy-paste your production code into the test (what has happened here) and compare the results. This way you don't test anything: you only test that Java compiler is producing stable results basically.",
+      "score": 92
+    },
+    {
+      "id": 3601357562,
+      "pr": 18027,
+      "own_pr": false,
+      "created": "2026-07-17T07:51:18Z",
+      "path": "go/polyflow/iris/conveyor/pfi/ustax/source_products_node.go",
+      "in_reply_to": null,
+      "body": "Jesus... did you read any of this _at all_??? For _each record_ that we're inserting in Spanner we're making THREE reads from Spanner. This is a disaster.\n\nThere must be absolutely ZERO reads during the sync. ZERO.",
+      "score": 92
+    },
+    {
+      "id": 2300619580,
+      "pr": 10463,
+      "own_pr": false,
+      "created": "2025-08-26T11:01:16Z",
+      "path": "iris/service/irisflow/src/main/java/nutshell/iris/irisflow/service/ConfigurationService.java",
+      "in_reply_to": null,
+      "body": "Since there is no documentation / design decision traces whatsoever, I am going to assume that all of that \"scrubbing\" is trying to achieve one goal: being able to delete client \"FOO\" and then create it again later. \n\nEven though I suppose this was made with the demo platform in mind (where we can add/delete/add the same things over and over again), we should always think about \"real\" production use-case first.\n\nPurely from the compliance perspective, this raises a big question if such an action is legitimate:\n* first, by hard-deleting a client you basically remove all the traces about it without leaving a chance to refer back to the data that was there before:\n    * you can no longer `JOIN` some tables with client-info / big config in order to figure out what config was used at what point in time, etc\n* then, by allowing the creation of the \"new\" client with once-existing ID you generate even more confusion: is it the same company? is it the same legal entity? is it responsible for all the docs that were created a year ago with the same client ID? what if I accidentally join this \"new\" client with old data that has the same client ID?\n* also, this messes up with an upcoming feature work on client-level permissions MASSIVELY,\n* finally, we have other mechanisms of preserving the history if we wanted to, like `_history` tables, etc\n\nTL;DR we should NOT allow that. IDs should be unique. Once assigned, they should never be unassigned. They should never be changed (and Spanner doesn't allow this to happen for a reason). All the deletes should be \"soft-deletes\".\n\nSo I think what should happen is, in transaction:\n* you mark all the big configs for this client as `STATUS_ARCHIVED`\n* you soft-delete a row from `client_info`, this should be a terminal operation and new client with the same ID should not be allowed \n* (in case we REALLY want to reuse a former one for the demo, we can just go and manually un-delete it in Spanner Studio)\n",
+      "score": 91
+    },
+    {
+      "id": 1789933689,
+      "pr": 6350,
+      "own_pr": false,
+      "created": "2024-10-07T10:14:56Z",
+      "path": "shared/lib/polyflow/src/main/java/nutshell/shared/polyflow/AbstractWorkflow.java",
+      "in_reply_to": null,
+      "body": "A couple of notes and nitpicks here:\r\n* `mapWorkflowNodes` can not be empty, as workflows without nodes don't exist (and our builders and code in other places doesn't allow it),\r\n* even if we pretend that this is possible, this algorithm is confusing, because it produces two different outcomes for basically the same use case: `protoRef` has less number of nodes than `getDag()`, then\r\n    * if `protoRef` is empty, i.e. during workflow augmentation, we deleted all the nodes, then... suddenly workflow remains the same and ignores our actions\r\n    * if `protoRef` has just one (or more, but not all) nodes deleted, then those nodes loose all their parents, which again produces incorrect DAG from polyflow standpoint (we will have more than 1 root)\r\n\r\nIn other words, what I am saying here is that generally we need to be careful with \"defensive programming\", which lines 99 and 107 in the above block of code represent:\r\n* you're trying to protect your algorithm from failing / throwing an exception when the input is incorrect, which is a noble intention, however...\r\n* you end up with a corrupt / incorrect state from the logical standpoint which \r\n    * is probably going to cause the code elsewhere to fail later, \r\n    * or, even worse, will mask a bug which will be hard to detect and investigate because we saw no failures, but ended up with a broken DAG which polyflow can't process properly.\r\n\r\nThis was a very long way to say:\r\n* if your code detects a condition that shouldn't happen (both if `protoRef` has 0 nodes or has less nodes that the original workflow), it _must_ fail and _must not_ hide the fact that something went wrong.",
+      "score": 91
+    },
+    {
+      "id": 2705628598,
+      "pr": 13635,
+      "own_pr": false,
+      "created": "2026-01-19T17:31:38Z",
+      "path": "java/testing/integration/iris/src/test/java/nutshell/iris/CoinTrackerIntTest.java",
+      "in_reply_to": null,
+      "body": "I think this check and another one below should go to `DocumentGeneratorJobTest` (unit-test). According to test pyramid, we should always prefer lower levels of testing if it's possible. \r\n\r\nIn this particular case, the fact that it runs in the integration test environment (local/CI) does not really bring anything new that can't be tested in `DocumentGeneratorJobTest`:\r\n* yes, `DocumentGeneratorJobTest` writes to file system and not to GCS (which from the Beam's standpoint doesn't matter), but we cover the integration between DocumentGeneratorJob and GCS elsewhere, like in `DocIntTest` -- there's no reason to assume that Tax jobs are unique enough that it is worth retesting here\r\n* we may encounter real issues when these jobs are ran in the real environments because they're going to run in real Dataflow, however integration tests don't run in real dataflow, they run in mockman using basically the same in-memory Dataflow runner as `DocumentGeneratorJobTest`\r\n\r\nSo all in all, even though I believe these checks are lightweight and don't contribute much to the integration tests runtime length, it's still preferable to shift to the lower level of test pyramid:\r\n* it keeps integration tests smaller and cleaner (otherwise one might wonder why exactly do we test it here?)\r\n* integration tests are naturally very flake-prone, there's a lot of moving parts involved, the less we test there the better (again, if avoidable! if not, we absolutely must add more integration tests, don't get me wrong here)",
+      "score": 91
+    },
+    {
+      "id": 3497351096,
+      "pr": 17631,
+      "own_pr": false,
+      "created": "2026-06-30T08:39:42Z",
+      "path": "_proposals/IRIS-4149-bump-proposal.md",
+      "in_reply_to": null,
+      "body": "It is and always will be gRPC, why do we need an interface as if we expect that it's somehow can be HTTP, pubsub, etc? This is misleading _and_ this is a very peculiar implementation detail.\n\nI think, yet again, this goes beyond the proposal. It is counter-productive and actually destructive (because it converts the proposal into a living doc which _it is NOT_) to keep updating it after each refactor and comment. Stop it. \n\nProposlal should convey \"here's my original idea\", it should (_must_) not be up to date. \n\nThis way in a year from now we can see \"huh that's what we actually had in mind when we came up with this and it diverged massively, we need to think what should we do with this\".",
+      "score": 91
+    },
+    {
+      "id": 2723858107,
+      "pr": 13634,
+      "own_pr": false,
+      "created": "2026-01-24T07:58:04Z",
+      "path": "shared/lib/react-pdf/fns/src/adjust.ts",
+      "in_reply_to": null,
+      "body": "We need to PL / `#architecture` this.\r\n\r\nOak normally only has Nuthsell's IP, and `react-pdf` fork is not Nutshell's IP. It doesn't even have any LICENSE information around it and so forth.\r\n\r\nWe use and used many forks of open-source libraries but we never brought any of them into Oak, I don't understand what has changed since then and why all of a sudden we want to have a 3rd party library fork part of our day-to-day CI process and localdev loop?\r\n\r\nTL;DR to make it clear: I feel strongly _against_ having 3rd party libraries checked into Oak.",
+      "score": 91
+    },
+    {
+      "id": 2742083152,
+      "pr": 14060,
+      "own_pr": true,
+      "created": "2026-01-29T14:58:52Z",
+      "path": "iris/service/aether/src/lib/helpers/jobs.ts",
+      "in_reply_to": 2738514988,
+      "body": "RE: zod (and ts-match). I'll reply here as Github doesn't allow to reply to non-line-based PR comments.\r\n\r\nZod is a useful lib but I think it's practical use-case is different and way more narrow then we used to think. I can give you a simple example of what I mean and why `something.field ?? \"\"` is better than Zod.\r\n\r\nLet's imagine we have a bug in Bff or Backend or CDC, or whatever, and some API call that usually returns\r\n```\r\n{ id: \"foo\", name: \"bar\" }\r\n```\r\nthat is by contract guaranteed to return both fields as non-empty strings, suddenly omits name. Just a bug.\r\n\r\nNow if we have a Zod schema that enforces that validation at the response time, we'll get an error screen, right? Stuff doesn't work, we have display error page 500 or whatever. So what happens is that we prevent the rest of the screen / UI from working, even though this could be just a tiny secondary element in a table that we don't really care much about.\r\n\r\nWe already have a bug, we know it, but instead of limiting the impact by just filling the affected field on the UI as empty string or `<missing>` placeholder or something, we crash. This I never liked and understood about Zod. Yeah it does make it somewhat easier to develop stuff and it makes it kind of a bit clearer what exactly goes wrong, but it is terrible in production. In production, most of the time, we want too carry on regardless of the bad data coming from BE, but with Zod, we can't.\r\n\r\nNow finally, and I think even more importantly `something.field ?? \"\"` is an absolute piece of cake for AI. It doesn't get tired by doing that everywhere, trust me. Humans would've hated that, but we shouldn't force humans to write FE. AI is much better at it and much faster.\r\n\r\nSame applies to ts-match. Yes, ts-match is neat and powerful, providing you care about your types. But AI usually doesn't care about clean types and AI doesn't use it even though it's a dependency in the library. So why enforce that if practical result is absolutely the same, but using ts-match is just more burdensome for both you and AI, because AI will never use it free-willingly and you, as an AI user, will always waste time asking AI to correct that. ",
+      "score": 90
+    },
+    {
+      "id": 1859224805,
+      "pr": 7434,
+      "own_pr": true,
+      "created": "2024-11-26T21:07:24Z",
+      "path": "docs/workflows_101.md",
+      "in_reply_to": 1859062602,
+      "body": "> Is this true?\r\n\r\nYes, nodes are _expected_ to be idempotent. There is no \"exactly one run\" guarantee in polyflow.\r\n\r\n> Any workflow could be rerun from the start and there would be no change of external state?\r\n\r\nI don't think that the statement `the whole workflow is idempotent` is equivalent to `each node is idempotent`. \r\n\r\nIndeed, in an M1 docjob:\r\n* you can execute and then re-execute M1 data collector (pre-ingest node) and you'll get the same result. \r\n* after it's done, you can execute and then re-execute ingest and you will produce an equivalent result, even though it is not byte-by-byte equal. \r\n* after that, you can safely re-run docgen job even 100 times and it will not duplicate documents,\r\n* same with warnings policies, they're already in place, etc. \r\n\r\nBut if you rollback the whole thing, there will be dupes because Ingest produces non-deterministic UUIDs for their outputs. It is quite easy to fix to be honest, but it is a way stronger requirement than \"at any given time an ACTIVE node may execute twice without causing additional side-effects\" and we're not pursuing that.\r\n\r\n> I like ietf's definitions for this type of specification. https://www.ietf.org/rfc/rfc2119.txt I suspect this is a \"SHOULD\" not a \"MUST\" or \"MAY\".\r\n\r\nHonestly, I think that's a `MUST`. For example, we're using marketing campaign ID in deliveries exactly because of this `MUST`. \r\n\r\nBut the reality is that not all workflows made equal. I literally don't care if doc story workflow and / or any of its nodes are idempotent, even though I still expect it to be so.",
+      "score": 90
+    },
+    {
+      "id": 2888638548,
+      "pr": 15286,
+      "own_pr": false,
+      "created": "2026-03-05T09:03:12Z",
+      "path": "docs/proposals/20260305_axe_twirp_from_oak.md",
+      "in_reply_to": null,
+      "body": "There are many benefits in using vanilla gRPC:\n* it's binary, lower footprint and faster protocol\n* it's already supported by the [protobuf-ts/grpc-transport](https://www.npmjs.com/package/@protobuf-ts/grpc-transport), so the rewrite on the Node side should be minimal\n* it's obviously supported on Java / Go side, so it's a trivial change on the `Generator.java` side\n* we can get rid of Twirp-related codegen for Java, which we only keep because of docgen\n* new Rust / Typst docgen will be pure gRPC, so adjusting our tooling for it is crucial\n\nAnd that is the only question that remains to be answered: how do we point devtool at it? \nMy expectation here was that you'll research the subject, because it's a solved problem in Oak: \n1. both Aether and Admin UI actually implement pure gRPC services but they are accessible from the browser, do you really know how? \n2. we expose public API in irisflow that M1 uses, it is implemented as pure gRPC service and yet M1 sends us HTTP REST requests, how?\n\nAnswering those question and understanding how things work in Oak is vital. Without it, one can't come up with a right solutions to problems.\n\nI am seeing the right way of solving a devtool problem similarly to the solution of a public API problem ([2] from the list above): we want to serve gRPCs to docgen in Dataflow,  but browser needs to access them too in a devtool scenario.\n\nSo please take it from here and update your proposal accordingly.",
+      "score": 90
+    },
+    {
+      "id": 3680597131,
+      "pr": 18256,
+      "own_pr": true,
+      "created": "2026-07-30T06:51:30Z",
+      "path": "java/nut/iris/src/main/java/nutshell/iris/ustax/nut/UsTaxService.java",
+      "in_reply_to": 3679781436,
+      "body": "I wrote in the PR description:\r\n> Added new US Tax endpoint that resolves transmission ID into the GS URI (this is a storage saving feature as millions of forms would have the same GS URI)\r\n\r\nCurrently it's just faked, but later it becomes real:\r\n(a) we can but don't want to store `xml_gs_uri` in each successful IRS submission result product, because it's a huge waste of spanner storage space\r\n\r\nAnd (b), it is not about the bucket. Bucket is an implementation details. US Tax service is responsible for keeping XML, right? Right, so:\r\n* Who said it should be in GCS in the first place?\r\n* What if US Tax service has its own spanner table where it keeps XMLs? Then this call will make a look up in Spanner, fetch it and put it into GCS bucket (temporarily).\r\n* What if US Tax service doesn't store any XMLs, what if there's suddenly a way to fetch it directly from IRS? Then upon receiving this call, US tax service calls IRS and fetches XML and puts it into GCS bucket\r\n* Etc\r\n\r\nThis is again, an example of thinking about responsibility boundaries and inputs/outputs. If we leak the information about where transmission XMLs are to conveyor, and we later change where and how they are stored, we're suddenly in a position where we have to change the code in two places. With this simple API endpoint approach, we can refactor US tax service every day and nothing would change on the conveyor side.",
+      "score": 90
+    },
+    {
+      "id": 1177493471,
+      "pr": 208,
+      "own_pr": false,
+      "created": "2023-04-26T08:02:01Z",
+      "path": "crazyprinter/jobs/migrations/src/main/resources/db/migration/V005__crazyprinter_batch_created_at.sql",
+      "in_reply_to": 1177149304,
+      "body": "> we should just do a hack job, and design a more robust solution later instead of rushing it\r\n\r\nI have to disagree on this. In my opinion, this was just a missed opportunity to learn. And this was exactly an example of \"rushing it\". We are not building `crazyprinter` to show demos to Danny R. no matter what the cost is, we are building it to learn. \r\n\r\nThere was just no reason to rush this change in, we had 2 full days before demo, even if we didn't have a nice redirect or an super simple way to find batch after it was submitted -- that's not a big deal, we didn't have this goal. \r\n\r\nI don't believe that having timestamps as strings in DB schema is what we want in our products, even if it's just `crazyprinter`. We use timestamps as strings in proto-s exactly because we won't need any explicit data conversion this way if we use them to query DB Timestamp types. This sql works just fine:\r\n```\r\n... WHERE my_timestamp_column > '2023-04-23T12:23:56.000'\r\n```\r\n Even if we wanted to have something super simple which doesn't affect our library code, we should've used commit timestamps. This way, we would've had literally 3 changed lines in the whole PR:\r\n* migration adding commit timestamp column\r\n* `order by modified_at desc` in JdbiDao\r\n* `.sort()` statement in InMemoryDao",
+      "score": 90
+    },
+    {
+      "id": 2889702630,
+      "pr": 15242,
+      "own_pr": false,
+      "created": "2026-03-05T12:30:45Z",
+      "path": "docs/proposals/20260303_state_tax_filing.md",
+      "in_reply_to": null,
+      "body": "Finally! Line 129 and we finally get an idea that there's one and only one new workflow needed 😄 \n\nThe instructions here are again super vague. \n* What parameters root node should take?\n    * LLM can figure that out, and it will, \n    * the problem is that it's that exact thing that should come from you -- you should recognize that there's a new proto required that is the root node params, and you should define it here\n    * because this is exactly that thing that will remain forever in a database that we will have to support forever (maybe not with this particular workflow, but that's what I was talking yesterday in arch meeting)\n* how many nodes are involved overall? \n    * you have a reference to DocumentManifestNode + transfer mechanics, which is great, but the overall workflow structure should be crystal clear: it is up to YOU to design workflows, not up to Codex\n* like these actions \"Build AR CEL filter server-side\" and \"Write AR manifest\" -- they are on the same level on your list, but again it is not clear: what is a node and what is note. As I said, you have to drive that, not Codex.",
+      "score": 90
+    },
+    {
+      "id": 3247043068,
+      "pr": 16680,
+      "own_pr": false,
+      "created": "2026-05-15T08:58:03Z",
+      "path": "_proposals/IRIS-4032-atomic-ftp-integration.md",
+      "in_reply_to": 3230148417,
+      "body": "We should always use request-response node pattern because of the concurrent nature of events. If single node sends a request that is immediately processed and receives a pub-sub response before the workflow state was saved, the message won't be processed and will be lost.\n\nDataflow batch nodes break this pattern, true, but this is because (a) historical reasons (it was created super long time ago before workflow augmentation existed, so it manages complicated stuff like automatic retries, handling of 409s, etc)\nand (b) we know dataflow is quite slow in practice so the chance that we receive an update before we saved the state is low. \n\nAlso, even if that happens, the update that we'll miss is going to be like `STATE_CREATED` and that is not a big deal.\n\nSo TL;DR always use request-response pattern AND always put response node first (so it activates before we send any requests)",
+      "score": 90
+    },
+    {
+      "id": 2675137802,
+      "pr": 13440,
+      "own_pr": false,
+      "created": "2026-01-09T07:27:20Z",
+      "path": "java/dataflow/iris/ingest/src/main/java/nutshell/iris/ingest/transform/reader/fis/FISBrokerageStatementMapper.java",
+      "in_reply_to": null,
+      "body": "Yet again the amount of \"protective noise\" from AI is incredible. Can this list be empty? Probably not? \n\nIf yes, returning an empty `IngestOutput` will just cause failures downstream. In a way, AI acts in a \"selfish\" way, like \"I want my code not to crash at any cost and I don't care what is going to happen downstream\". This is wrong in general and the cleanup is always warranted after AI generated their code.\n\nP.S.: \"Never crash\" approach is great for UIs, I assume, if something buggy arrives from BE you just don't want to ruin user's experience and just make a best effort in keeping going, right? But that is not true for BE, so scrutiny is always required post generation.",
+      "score": 90
+    },
+    {
+      "id": 2425351733,
+      "pr": 11657,
+      "own_pr": false,
+      "created": "2025-10-13T06:49:08Z",
+      "path": "java/polyflow/iris/src/main/java/nutshell/iris/irisflow/polyflow/post/ZipPostDeliveryNode.java",
+      "in_reply_to": null,
+      "body": "Didn't catch my attention the first time, but this should at least be `log.error`. If this is true, then something went super wrong: the document couldn't be generated by docgen, because of the data or a bug, but then for some reason the person who reviewed the warnings decided to ship this document anyway. This should raise an alert.\n\nGeneral advice: LLMs tend to use \"defensive programming\" style when it obsessively checks the data to prevent exceptions / crashes. More often than not, however, we _better_ crash if there's a problem with the data or a bug somewhere in the flow instead of silently dropping stuff like this on the floor and proceed.",
+      "score": 90
+    },
+    {
+      "id": 2419023227,
+      "pr": 11657,
+      "own_pr": false,
+      "created": "2025-10-10T09:10:17Z",
+      "path": "java/polyflow/iris/src/main/java/nutshell/iris/irisflow/polyflow/post/ZipPostDeliveryNode.java",
+      "in_reply_to": null,
+      "body": "What I _am_ concerned about is that this is not covered with any tests whatsoever! \nManual testing steps are great, but the absolutely MANDATORY requirement for EVERY pull request with new features is that those are covered with unit-tests.\n\nI talked about test pyramid last week, this PR doesn't reflect what was agreed back then.",
+      "score": 90
+    },
+    {
+      "id": 2434809974,
+      "pr": 11765,
+      "own_pr": false,
+      "created": "2025-10-16T07:08:52Z",
+      "path": "java/polyflow/iris/src/test/java/nutshell/iris/irisflow/polyflow/PostDeliveryWorkflowTest.java",
+      "in_reply_to": null,
+      "body": "Once again, test quality is important! \n\nThis does NOT verify that we produced the correct row / file. Why? \n* If all the columns are in the wrong order this test passes\n* if we did not include `side_count` at all this test passes (because number 3 is part of the address itself)\n* etc\n\nWe have a perfect check of the expected header above and then suddenly rows assertions are different, I don't understand this. I mean I understand that this is probably an AI slop, but YOU, developer, is responsible for the contents of this PR, not AI agent.",
+      "score": 89
+    },
+    {
+      "id": 3497268570,
+      "pr": 17631,
+      "own_pr": false,
+      "created": "2026-06-30T08:26:09Z",
+      "path": "_proposals/IRIS-4149-bump-proposal.md",
+      "in_reply_to": null,
+      "body": "Oh this is _so synthetic_ and meaningless. What is \"protocol and library split\"?\nBump is an application layer protocol. Period. Just like HTTP. \n\nOf course there are many libraries that support HTTP so you don't have to implement your own TCP/IP session handling and write raw bytes to the socket. It's just exactly the same here. \n\nAlso we agreed that proposals are written by humans and clearly this one is not.\n\nI actually think that the original description was _much better_. I wouldn't change it at all.",
+      "score": 89
+    },
+    {
+      "id": 2416126641,
+      "pr": 11621,
+      "own_pr": false,
+      "created": "2025-10-09T09:23:44Z",
+      "path": "iris/devops/terraform/2-deploy/modules/m1/bigquery.tf",
+      "in_reply_to": 2413589567,
+      "body": "> We use the \"collector\" job to pull data from that bucket into the ingest-input bucket; I advocate for sticking with the pattern here.\r\n\r\nWe need collector there not because Beam is not capable of reading Parquet or whatever data format, we need it because we need to actually query / join / merge stuff, which is partitioned by date, etc, which is way harder to do in Beam.\r\n\r\nHOWEVER, in this case, what I am seeing in _this particular BQ table_ configuration -- there's _just_ one file. Literally ONE file for all the jobs. There's no date partitioning, there's nothing to query, we just need to ingest the whole damn thing and \"zip\" it (in a functional sense) with the rest of the data, no? \r\n\r\n**That is why** I started questioning this whole thing, because I don't believe that's how it is going to work. I think we end up with the data being partitioned by date, like you said \"like the rest of the data that we have\". And _then_ data collector will start making a ton of sense.\r\n\r\nThe cost of Data collector updates is high. The cost of reading a single file in Apache Beam and feeding it into already existing `CoGroupByKey` transform is extremely low, however.\r\n\r\n> If implementing this now makes sense in terms of moving the project forward, Andrew can choose to take on the risk of needing to do clean-up later in m1 stg and prd\r\n\r\nI sort of strongly disagree with this approach, we shouldn't test stuff in prod, this doesn't scale. We talked about it last week, it is inefficient and extremely fragile approach to work like \"Let's ship this to prod and see what happens\". The turnaround is extremely long, the cost of mistake is extremely high.\r\n\r\nI don't see how this is blocking anyone frankly, there's no code that runs against it? I don't understand. We're not pointing our localdev to prod, right? We're implementing stuff locally, make sure it works, and then we ship. \r\n\r\nWhat I am _not_ saying here is that we can't merge terraform or we should split something into N pull requests. What I am _actually_ saying is \"we can't merge terraform without the code that uses it\". If this PR contained the updated queries and other stuff, I would've been more than happy to approve.",
+      "score": 88
+    },
+    {
+      "id": 2454042177,
+      "pr": 11894,
+      "own_pr": false,
+      "created": "2025-10-23T06:21:43Z",
+      "path": "java/polyflow/iris/src/main/java/nutshell/iris/irisflow/polyflow/post/GeneratePostDeliveryZipNode.java",
+      "in_reply_to": 2453421136,
+      "body": "Oh, of course we don't want that, that's pretty remarkable how far AI can go to achieve what was asked from it 😄 \n\nLet's cover this point by point, just trying to point out objective issues with this code:\n* \"try-with-resources\" is a Java feature that was added by a reason: you can NOT (and you can read about this on the Internet if you want to understand why) manually ensure that all the resources are properly closed without using this statement. Period.\n* generally speaking, if your method has more than 3-4 arguments, it rather should be incapsulated as an object instead, like `PostDeliveryProcessor` or whatever, where you initialize empty arrays in the constructor, etc and your main code remains clean and readable\n* I already mentioned that separating failed and successful deliveries is not needed\n* and then `try-finally` that you have above (lines 135-140), it closes resources but also flushes data to DB first, but what if there was a spanner exception in the first place that caused us to reach that `finally` block? Just a good example of why \"try-with-resources\" is the only option to close stuff.\n\nI understand that the problem you tried to solve is to avoid writing an empty ZIP if all files didn't pass validation, that is thoughtful and I appreciate that. (But it also makes a check with limit = 1 unnecessary, right?)\n\nHowever, this can be solved just by writing a temporary ZIP and then transferring it to a proper location if it is not empty. We talked about it with @asheragy too:\n* we need to have two folders in the bucket `gs://bucket/staging-area/` and `gs://bucket/sftp-area`\n* only the files that go to `sftp-area` should be pushed upstream to SFTP server\n* so first, you write everything (including manifest.tsv) to `staging-area/<job_id>/<your_file>`\n* then, if you think it makes sense to push that to SFTP, you copy ZIP archive to `sftp-area/<job_id>.zip` <-- I don't know what the actual format here is required, maybe they want us to include a date or something so that it is sorted alphabetically, let's stick with `<job_id>.zip` for now",
+      "score": 88
+    },
+    {
+      "id": 2896822824,
+      "pr": 15286,
+      "own_pr": false,
+      "created": "2026-03-06T16:53:17Z",
+      "path": "docs/proposals/20260305_axe_twirp_from_oak.md",
+      "in_reply_to": null,
+      "body": "I'll leave similar \"styling\" comments that I left in Brian's proposal PR (I actually encourage you to read those two, I think they're useful): \n* _in my opinion and experience_, both [2] and [3] are slightly too prescriptive, I mean I think they are correct overall, but being too prescriptive in the implementation details may backfire in an unexpected way. \n* like it may limit the \"research breadth\" of the LLM and it will just replace the lines of code that you've described, instead of spending some more ~time~ tokens on the research of the code and understanding the full scope of the migration. \n\nThis is an example of how I would've described both [2] and [3] in a single point:\n> 2. Migrate Java dataflow callsite from Twirp to pure gRPC:\n>     - Replace `Generator.java` with gRPC client instead of twirp client\n>     - Update error handling logic by replacing it with equivalent gRPC error code checks\n\nAnd that's it, note that:\n* I didn't use the full classname, because I mentioned \"dataflow\" already and if you search for both \"dataflow\" and \"Generator.java\" you'll find the right thing\n    * now, I don't mean using full classnames is _wrong_, it's just something LLM usually can figure out, _HOWEVER_, in some cases, especially when I talk about APIs, I always try to give full reference to a proto file for example, so it's not all black and white here\n* I didn't tell it how to replace HTTP error checks with gRPC errors, and/or I did not provide any references to where these checks exist in the code (even though I know where they are), \n    * that is because as I said by being slightly ambiguous here, I force LLM to do a thorough research and identify all the places in the code where error handling might occur\n    * like, what if I forgot about some class that also depends on twirp exceptions to do something? It very well might be, I don't want to limit LLM there and I want these places to be found and tackled as well",
+      "score": 88
+    },
+    {
+      "id": 1279320923,
+      "pr": 648,
+      "own_pr": false,
+      "created": "2023-07-31T13:46:51Z",
+      "path": "shared/lib/byob/src/main/java/nutshell/shared/byob/persistence/Dao.java",
+      "in_reply_to": null,
+      "body": "I think we've been through this before in NFS and NFT projects: pagination is hard.\r\n\r\nFrom the ticket description:\r\n> Note that [AIP 158](https://google.aip.dev/158) asks for pageSize and pageToken, where pageToken must be an opaque String. When we add pagination to our APIs, we should try to follow that, **but the DAO should just take a pageNumber.**\r\n\r\nI would suggest we revisit the last statement. Page number/page size combo is generally a poor choice (as, to a lesser extent, is page offset / page size) for multiple reasons:\r\n* (minor, usability) you can't adjust page size on the fly, like you can't continue where you left off and request 100 items instead of 20 items for your next page (not an issue if we use page offset/size combo)\r\n* (minor, consistency) you have a risk of showing duplicates if you do lazy loading on the UI as you scroll and new item is added to the previous page before you requested the next one\r\n* (major, consistency) there may be ties in the sorting. Like if you sort people by age, more than 1 person can have age of 30 years old. You have to do extra work to guarantee stable sorting, otherwise you may get the same people on page 1 and page 2 if the same age is spread across these two pages\r\n* (major, performance) `LIMIT X OFFSET Y` is simply slow when offset is large enough, it always does linear scan of all the results from row 0 and discards Y first elements before returning you the result. So with each page your queries will become progressively slower and slower\r\n\r\nAlternative is to use last item's ID as page token. It makes a query very simple and it makes execution super quick, and it also eliminates minor usability issues I mentioned above",
+      "score": 88
+    },
+    {
+      "id": 1753213156,
+      "pr": 6074,
+      "own_pr": false,
+      "created": "2024-09-11T06:30:31Z",
+      "path": "iris/smoke-test/src/test/java/nutshell/iris/IrisEndToEndTest.java",
+      "in_reply_to": null,
+      "body": "Once again, I'd like us to ask ourselves each time we adjust any integration test, is it worth it? What do we really test here?\r\n\r\nThis is how I read this: \"I want to be sure that if I ask emailer to filter by whitelist, that job won't ever be complete\". It's just a unit-test case right? It's basically:\r\n```\r\npokeNode(\"params-1\", Req.setWhitelist(\"foo@bar.baz\").build());\r\nvar workflow = getWorkflow();\r\nassertFalse(workflow.getNode(\"params-2\").getOutput().isComplete());\r\n```\r\n\r\nWe already know that if `isComplete()` is true, than the workflow finishes. It's been tested. We don't need to add more clauses to E2E test to verify that. So, again, we need to verify a very simple use-case where unit-test is more than enough. \r\n\r\nEvery single time you poke the node you add ~1 minute of runtime to this test, because it starts real Cloud Run job in both CI and E2E test in dev. \r\n\r\nWe should be mindful of a test pyramid. We're going to add more and more features to iris, these little things will pile up very quickly and our execution times will skyrocket.\r\n\r\ncc @chrisfesler ",
+      "score": 88
+    },
+    {
+      "id": 1309845581,
+      "pr": 814,
+      "own_pr": false,
+      "created": "2023-08-30T07:55:33Z",
+      "path": "iris/service/irisflow/src/main/java/nutshell/iris/irisflow/service/IrisFlowService.java",
+      "in_reply_to": null,
+      "body": "Would love to see these `synchronized` blocks / methods gone from `irisflow` and Polyflow lib. Yes, there is a comment beneath but it is still misleading. It does not really work, then why is it still there? Useless code = more complexity + more confusion.\r\n\r\nIt is even more misleading in `StandardWorkflow` and in `CodeDefinitionDaoSpannerImpl` (`MemoryImpl` is obviously fine because it is for tests only and must guard against concurrency within a single process). The reasons are once again the same: \r\n* it just doesn't work in a multi-process environment\r\n* library user might assume that it _must not_ be used in a multi-process environment and only in a \"singleton\" services\r\n* yada yada yada\r\n\r\nIn other words, I would rather see our codebase NOT being 100% robust in multi-process envs (as it _seems to be_ now, otherwise why `synchornized`?) and NOT having `synchronized` keywords everywhere (and having a ticket for becoming robust), than pretending to be robust.",
+      "score": 88
+    },
+    {
+      "id": 3247012050,
+      "pr": 16771,
+      "own_pr": false,
+      "created": "2026-05-15T08:52:03Z",
+      "path": "java/job/iris/delivery/src/main/java/nutshell/iris/delivery/template/MailTemplate.java",
+      "in_reply_to": null,
+      "body": "I am not sure I am following.\n\nThose are just variables, right? Why can't sendgrid just set those values for us, why do we do anything manually here? It is super unclear: neither PR nor ticket descriptions are helpful.\n\nAlso, what is QA section in \"How reviewer know it works\" about? We agreed long time ago that reviewers don't do any QA. It's your job.\n\nAnd then it's your job to prove that it works to reviewer by attaching screenshots of the steps that you followed to prove that it works.\n\nI can't tell that it works by looking at \"How reviewer know it works\", I am sorry.\n",
+      "score": 88
+    },
+    {
+      "id": 1858634041,
+      "pr": 7294,
+      "own_pr": false,
+      "created": "2024-11-26T14:23:06Z",
+      "path": "iris/proto/nutshell/iris/proto/irisflow_reports.proto",
+      "in_reply_to": 1858630888,
+      "body": "Also, in this particular PR, are we going to have different output types? If not, this enum should be removed. We should avoid building an API in anticipation of some features, because when time comes, they may not look like we have expected. Also, we may never need those features. And API would remain here forever.",
+      "score": 88
+    },
+    {
+      "id": 2774201211,
+      "pr": 14495,
+      "own_pr": false,
+      "created": "2026-02-06T13:38:33Z",
+      "path": "java/dataflow/iris/doc/src/main/java/nutshell/iris/doc/transforms/DocumentToBinary.java",
+      "in_reply_to": null,
+      "body": "This is generally wrong. \nWe never prevent document from generation if Ingest found any errors.\n\nOur basic principle is: push all the way through without crashing and report errors along the way, but produce document PDF at all costs.",
+      "score": 88
+    },
+    {
+      "id": 3601393224,
+      "pr": 18027,
+      "own_pr": false,
+      "created": "2026-07-17T07:57:12Z",
+      "path": "go/polyflow/iris/conveyor/pfi/ustax/sync_storage.go",
+      "in_reply_to": null,
+      "body": "Why load the full bucket contents into memory?",
+      "score": 88
+    },
+    {
+      "id": 2071310903,
+      "pr": 9253,
+      "own_pr": false,
+      "created": "2025-05-02T08:55:25Z",
+      "path": "iris/proto/nutshell/iris/proto/iris.proto",
+      "in_reply_to": 2071291162,
+      "body": "Keep in mind, that the UI that we make for this demo is probably not what we end up with long term. And we should keep our concept model separate from the interpretation of that model that we prepare for the demo.\r\n\r\nOur concept model is:\r\n* in docgen, each template has its own API request, domain model and, now,  configuration\r\n* I want to stress it again, that _conceptually_ each pair (tenant, document type) is a completely separate set of models, even though they may share a lot \r\n* therefore big config service provides separate big configs and resolved configs _per each document type per tenant_, like\r\n    * `ApexTradeConfirmConfig` + `*ResolvedConfig`\r\n    * `M1TradeConfirmConfig` + `*ResolvedConfig`\r\n    * `KrakenCostBasisConfig` ...\r\n    * etc, _EVEN_ if they all _currently_ look the same\r\n* whatever we consider potentially changeable / configurable in the template, goes into those _separate_ config, _including_ all the colors and logos, again, _EVEN_ if on the UI there is currently no option to set different logos to different templates\r\n* why? Because, yet again, conceptually this is our model and this is how flexible we want to be. You will never know what crazy things may our customers want. \r\n* What if:\r\n    * They may want to put completely different branding for their \"premium\" customers? \r\n    * And what if they want to do it ONLY for brokerage statements because nobody cares about trade confirms?\r\n    * What if they want to use golden colors everywhere for their high-wealth customers?\r\n    * What if they want to use red color in their trade confirms for all customers with name \"John\"?\r\n    * Who know else what?\r\n \r\nTL;DR: we want to support all of that upfront, and if anyone asks if we can do it, we say \"sure\" and do a couple of tweaks to the UI without piling up tech debt on top of simplistic approximations that we currently have.",
+      "score": 87
+    },
+    {
+      "id": 3015592613,
+      "pr": 15764,
+      "own_pr": false,
+      "created": "2026-03-31T12:30:29Z",
+      "path": "_proposals/DEV-838-keycloak-localdev-detailed.md",
+      "in_reply_to": null,
+      "body": "Not sure if this was based on the previously existing `aether` that indeed exposed several non-production endpoints, but my preference here would be not to introduce any APIs that are never used in production.\n\nThe reason for that is I want to avoid a bunch of FE logic that exposes internals/localdev/etc behavior and never gets hit for real.\n\nWe serve static HTML/JS, and unlike with old aether where we had server-side rendering and could hide the presence of localdev/CI-only code there, we really can't here. So whenever we add \"test-only\" endpoints, they will be visible for anyone curious who's going to grab and scan our JS file.\n\nAnother reason is that those endpoints will by design have to be \"auth-exempt\" and anything that is \"auth-exempt\" is scary. Yeah, for sure, there will be\n```go\nif !cfg.IsLocalDev() {\n    return UNAVAILABLE\n}\n```\nor something right in the beginning, but if we can avoid that, I'd prefer to avoid that.\n\nIf we really need to have some logic that should run in front of the keycloak, I'd prefer having it implemented in mockman or something like that:\n1. You open Admin UI in localdev for the first time\n2. `admin` go returns 401\n3. FE redirects to `?gcp-iap-mode=GCIP_SIGNOUT`\n4. `admin` go in localdev mode, just like today, detects that, and (if localdev mode is keycloak) makes a call or a redirect to `mockman.local/keycloak/login?return_to=...`\n5. Mockman does whatever is needed to emulate key exchange and whatnot, returns back JWT that is set into the cookie just like self-signed JWT does\n6. FE is now authenticated locally\n\nMaybe I am missing something important here, but I think it'll be great if we can avoid exposing test-only endpoints as part of our production APIs.",
+      "score": 87
+    },
+    {
+      "id": 1778079626,
+      "pr": 6326,
+      "own_pr": true,
+      "created": "2024-09-27T06:34:50Z",
+      "path": "iris/service/aether/src/app/(admin)/admin/_components/WorkflowView.tsx",
+      "in_reply_to": 1777141280,
+      "body": "I agree with what you said and I am willing to implement the change, but the action you took is too aggressive.\r\n\r\nChoosing \"Request changes\" is something we as a team must avoid unless it's absolutely necessary, because currently my PR is completely blocked until you wake up and unblock it some 8-12 hours later.\r\n\r\nI'd like to point you at our agreements about Pull Requests, and at \"[Being a reviewer](https://github.com/nutshelllabs/oak/blob/main/docs/pull_requests.md#being-a-reviewer)\" section in particular, quote:\r\n> Even if you want changes, choose Approve rather than Request Changes unless it's necessary for you to re-review the PR once the changes are made.\r\n\r\nand\r\n> \"Please use the streaming API here\" -- this is a direct ask for a change and should hold up the merge if the author disagrees (note that you can still usually Approve the PR and trust the author to either make the change or continue the conversation to resolution).\r\n\r\nI doubt that it is either necessary for you to re-review what you've asked, or you don't trust me enough to make a change.\r\n\r\n\r\n",
+      "score": 87
+    },
+    {
+      "id": 3712840652,
+      "pr": 18432,
+      "own_pr": false,
+      "created": "2026-08-04T13:12:57Z",
+      "path": "go/lib/iris/ustax/elasticsearch/queries_test.go",
+      "in_reply_to": null,
+      "body": "This test is better than nothing, but it is bad in a way that it assumes that products are processed through CDC and get into ES in a certain and fixed way, and then runs queries against it.\n\nIn reality, how things happen in CDC can drift, and drift significantly. So if I go and change how cdc works today, how it maps stuff into front-end facing objects, etc, this test remans green, even though queries will need to be updated before they can be used against new CDC-ed data shapes.\n\nThere was a reason why this test file didn't exist, because all the testing of queries should go hand in hand with the cdc process itself:\n* `go/nut/iris/cdc/ustax_scope_es_spanner_test.go` is responsible for that\n\nIt inserts _products_ into the spanner and lets CDC process them and populate ES indexes, and only then runs queries against it: it is better because\n- (a) it _actually_ verifies that queries will yield the required results after real products go through real cdc\n- (b) catches potential regression when changes in CDC break some queries' semantics",
+      "score": 87
+    },
+    {
+      "id": 2667827413,
+      "pr": 13411,
+      "own_pr": false,
+      "created": "2026-01-07T10:10:00Z",
+      "path": "java/job/iris/fis/src/main/java/nutshell/iris/fis/FISDataCollector.java",
+      "in_reply_to": null,
+      "body": "Is this actually possible? What does `null` or empty map mean in this case? There was a parser error?\n\nThis is a great example of how defensively AI writes the code, that it always seems to be correct even though it may skip a ton of data because of the silent `continue;` like this. We should always be careful with that.\n\nWhat I tend to do is to go through the code and remove the checks like this unless it's a _really_ quite an expected outcome (like empty map can come from the data and that is OK to just skip it).\n\nOtherwise it's hard to tell apart real expectations from the pure defensive checks.",
+      "score": 87
+    },
+    {
+      "id": 2432518400,
+      "pr": 11742,
+      "own_pr": true,
+      "created": "2025-10-15T13:13:04Z",
+      "path": "java/nut/iris/src/test/java/nutshell/iris/irisflow/nut/ComplianceReportingServiceTest.java",
+      "in_reply_to": 2432277156,
+      "body": "(I understand you don't ask me to make a change 😄)\r\n\r\n> \"should I add a comment?\"-meter as you code\r\n\r\nI think, especially in an LLM era, we actually should recalibrate our comment-meter to less verbosity, because what previously was basically \"summary of the code / change\" written by human, can now be done by LLM. More than that, I think maintaining that \"the code is the truth\" is important, and comments often left unchanged after the code has changed. So stale comments can be actually dangerous to LLM.\r\n\r\nNot asking you to ask `claude` about anything during the review, btw, but here's what my thinking was:\r\n* the test body itself didn't change\r\n* the test is quite simple (yes, it requires understanding of polyflow, yet the test flow itself is simple)\r\n* there's no magic constants or convoluted setups that are specific to _this test_, it uses common test library classes\r\n* so if anyone stumbles upon this test and is curious what is happening, LLM will give an answer in under a minute:\r\n```\r\n  This test file verifies the ComplianceReportingService which handles creating, retrieving, and deleting compliance reports for documents. Here's what it tests:\r\n\r\n  Test Structure (lines 48-84)\r\n\r\n  - Sets up an IrisflowUnitTestHarness with a custom RemoteExecutionContextFactoryImpl\r\n  - Creates a ComplianceReportingService instance\r\n  - Tests run in the context of different authorization roles\r\n\r\n  Authorization Tests (lines 86-129)\r\n\r\n<REDACTED>\r\n\r\n  Functional Test (lines 131-186) - test_works\r\n\r\n  This test verifies the complete lifecycle:\r\n  1. Creates a compliance report\r\n  2. Tries to get download URIs immediately (should fail - report incomplete)\r\n  3. Simulates remote execution by counting down a latch\r\n  4. Gets download URIs successfully (CSV + ZIP file)\r\n  5. Deletes the report\r\n  6. Verifies report no longer exists\r\n\r\n  Custom Test Infrastructure (lines 188-218)\r\n\r\n  The RemoteExecutionContextFactoryImpl is a test double that:\r\n  - Simulates remote execution of workflow nodes\r\n  - Uses a CountDownLatch to control when execution happens\r\n  - Executes nodes asynchronously in a background thread\r\n\r\n```\r\n\r\nHowever, what I may have added is a comment _in the PR_ (and not in the code), as I did with other places I thought worth commenting on :-)",
+      "score": 86
+    },
+    {
+      "id": 2707307682,
+      "pr": 13720,
+      "own_pr": false,
+      "created": "2026-01-20T08:35:03Z",
+      "path": "java/polyflow/iris/src/main/java/nutshell/iris/irisflow/polyflow/docjob/IngestionJobNode.java",
+      "in_reply_to": 2706235938,
+      "body": "That's exactly why we have CEL expression that determines where to get the output URI from. By removing this feature, you make ingest node less flexible and also you make ingest node aware of tenants and surrounding workflow shape, which is exactly the reason why this CEL params configuration exists: ingest node shouldn't be aware of any of that and should be configurable \"from the outside\". \r\n\r\nIn other words, now whenever we change workflow structure, we must make sure that ingest node is in sync which sucks.\r\n\r\nThere's a reason this CEL configuration exists: before, we had complicated enough use-cases where ingest job simply didn't get its output from the root node. Later on, things were simplified and the only CEL expression (that you've just removed) remained. Now things get complicated again:\r\n* for tax jobs, we need to take output URI from `pre-ingest-export`\r\n* otherwise, we need to take output URI from `pre-ingest`\r\n\r\nThis ⏫ can be expressed in both CEL expression or in Java code, it's up to you to decide which path to chose. I like the idea of CEL expressions being self-contained, it makes it easier to preserve backwards compatibility if we want to reshape the workflow significantly, but as I said you decide how to approach this:\r\n\r\n```java\r\n.withNodeParams(\"\"\"\r\n  has(dependency_outputs['pre-ingest-export']) ? \r\n    dependency_outputs['pre-ingest-export'].output_gs_uri\r\n    : dependency_outputs['pre-ingest'].output_gs_uri\"\"\"));\r\n\r\n// or\r\n.withNodeParams(\"\"\"\r\n  tax_docs := {\"consolidated_1099\": true, \"form_w9\": true, <...>, \"form_w8ben\": true};\r\n  dependency_outputs['root'].document_types.exists(x, has(tax_docs[x])) ? \r\n    dependency_outputs['pre-ingest-export'].output_gs_uri\r\n    : dependency_outputs['pre-ingest'].output_gs_uri\"\"\"));\r\n\r\n// or\r\nvar ingestOutputLabel = isTaxDocsJob(input) ? \"pre-ingest-export\" : \"pre-ingest\";\r\n<...>\r\n.withNodeParams(\"dependency_outputs['%s'].output_gs_uri\".formatted(ingestOutputLabel));\r\n```",
+      "score": 86
+    },
+    {
+      "id": 1328483729,
+      "pr": 919,
+      "own_pr": false,
+      "created": "2023-09-18T09:47:59Z",
+      "path": "iris/proto/nutshell/iris/proto/iris.proto",
+      "in_reply_to": null,
+      "body": "🧠 ⚡  I am slightly concerned about `TODO` comments you've added in this PR. It seems to me that not all of them are really action items which you (or anyone else) is going to address in the future, but rather a notes on implementation peculiarities / details. \r\n\r\nFor instance, what is the call to action here? Refactor `ProtobufCodec`? Stop using `ProtobufCodec` as a dependency? Change this proto message later? It is all unclear. Also, I doubt that it is going to be addressed at all.\r\n\r\nAlso sometimes it appears to me that we are using `TODO` as an excuse to leaving something un- or poorly implemented. (Not implying here that you have implemented something poorly here, just a random thought). Again, that is generally fine, unless it doesn't stay like this forever.\r\n\r\nI would propose putting `TODO` only at places which\r\n(a) going to be addressed\r\n(b) going to be addressed in the nearest future\r\n\r\nOtherwise we keep leaving these comments here and there and like 3 weeks after, the intent is no longer clear and it does look like there is no follow up action for 99% of our TODO comments.",
+      "score": 86
+    },
+    {
+      "id": 1832592680,
+      "pr": 6943,
+      "own_pr": false,
+      "created": "2024-11-07T12:23:31Z",
+      "path": "shared/proto/nutshell/shared/polyflow/proto/polyflow.proto",
+      "in_reply_to": null,
+      "body": "Ok, I see where this is coming from: this was my direct ask to prevent non-light nodes to be immediate dependents in workflow augmentation. I anticipated that it's the easiest workaround but obviously it is not.\r\n\r\nWe don't want this to be part of the API. Remote node execution is the implementation detail of how workflows work and it should have 0 effect on how workflows are stored. Same reason is why we don't need an extra node status. Node's \"weight\" shouldn't be part of the nodes state, so we need to remove this.",
+      "score": 86
+    },
+    {
+      "id": 2745136149,
+      "pr": 14038,
+      "own_pr": false,
+      "created": "2026-01-30T08:15:48Z",
+      "path": "go/nut/iris/aether/jobs_v3.go",
+      "in_reply_to": null,
+      "body": "This is a (potentially! see my P.S. notes below) breaking change currently as it is, but it's an easy one to fix.\r\n\r\nCurrently, as it stands, we have two types of jobs in Spanner:\r\n* older ones, that only had one (now deprecated) `document_type` field set in their root node's output\r\n* newer ones, that only set `repeated document_types` in their root node output.\r\n\r\nWhen new multi-doc-type jobs were introduced, there was also a change made to the CDC to ensure backwards compatibility with Aether: CDC retrofits `job.root.output.document_types[0]` into `job.root.output.document_type` when the latter is empty.\r\n\r\nSo far so good, right?\r\n\r\nWith this change, however, you added a new `document_types` field to the BFF API and updated the FE to use it which is great, that's what we want. \r\n\r\nHowever, there are still older jobs that never had `document_types` array set. Therefore if you open any of the older jobs in aether using this code, it won't see any document types set at all (because FE doesn't read singular old `document_type` field anymore).\r\n\r\nWhat should happen here is\r\n* singular `string document_type` should be removed / converted into `repeated string document_types` (we don't have to keep BFF APIs backwards compatible because they ship together with aether) -- **UPD: see my new comment below on that**\r\n* here, on the BFF side, you should account for the potential older jobs that have only singular `document_type` set, in a following way:\r\n```go\r\n// pseudo-code, Golang doesn't have ternary operator\r\nDocumentTypes: len(root.DocumentTypes) == 0 ? [root.DocumentType] : root.DocumentTypes,\r\n```\r\n\r\nThis way you ensure full \"forward-compatibility\" with any state you may find your ES index in.\r\n\r\nP.S.: note that this kind of \"forward-compatbility\" is actually ensured on CDC level too (see go/nut/iris/cdc/document_jobs.go:272), however, we can only rely on that if we are 100% confident that we did a full index reset on Docjob2 indexes, which generally speaking you never know, so it is always a good idea to make your code robust without relying on that. \r\n\r\nFor example, we for sure did index resets when we migrated to serverless elasticsearch, but M1 prod is still on a managed ES instance and I don't know when we did our stream reset there for the last time. \r\n\r\nTL;DR: to reduce headaches from thinking about all of that, it's always easier to just make your code robust and prepared for any outcome",
+      "score": 85
+    },
+    {
+      "id": 1520857482,
+      "pr": 2709,
+      "own_pr": true,
+      "created": "2024-03-12T05:07:43Z",
+      "path": "shared/lib/streammanager/src/main/java/nutshell/shared/streammanager/ChangeStreamManager.java",
+      "in_reply_to": 1520483098,
+      "body": "There are several reasons why we shouldn't.\r\n\r\nFirst, and most important one, our Change Streams' capture type is configured to `NEW_ROW`. Read more about it here: [Value capture types](https://cloud.google.com/spanner/docs/change-streams#value-capture-type). What it gives us is that we always get a full row of every Spanner update regardless of how many columns were changed. For instance, soft-deletes only update `deleted` column and it is super handy.\r\nAs a consequence, we don't get any data except primary key if we actually hard-delete stuff. I hard-deleted a buggy workflow from dev-kb yesterday when I was testing Job Copy, and you can see the data change record shape [here](https://console.cloud.google.com/logs/query;query=resource.type%20%3D%20%22cloud_run_revision%22%0Aresource.labels.service_name%20%3D%20%22cdc-kb%22%0Aresource.labels.location%20%3D%20%22us-central1%22%0A%20severity%3E%3DERROR;pinnedLogId=2024-03-11T13:31:32.600Z%2F1lpreqnf7oa1ig;cursorTimestamp=2024-03-11T13:31:34.313Z;aroundTime=2024-03-11T13:31:32.600Z;duration=PT1H?project=prj-d-iris-kb-z5t3&rapt=AEjHL4OZceniYT6grHDiJJOrcCFCSb656t7e6VFvMX-D7bDGJT5NAp_W1DnmawFFL110Uf24sqgSo-b7MumdJoo6euqgVVk1d-VKZ1TiqEnQQ9v1MFB5A6E).\r\n\r\nSecond reason in my opinion is also quite important: don't write code which you don't need. Because not only that you need to cover it with tests and maintain when you do refactors and stuff, you also give an impression that it is a normal execution path and deletes are normal. And they are not.\r\n\r\nFinally, if CDC ever sees deleted stuff, it either happened due to a bug, or intentionally due to some manual intervention.\r\n* if it happened due to a bug, I'd prefer not to cover this bug with some code and pretend that everything is fine, but rather signal that there _is_ a bug which causes deletes, hence the logs (ideally we should have alerting set up to notify us when that happens)\r\n* and if it happened manually, then it is not a big deal to go and send a delete query to ES also (I literally did that yesterday in dev-kb when I found a bug in my workflow, see logs above)",
+      "score": 85
+    },
+    {
+      "id": 2487107647,
+      "pr": 12073,
+      "own_pr": true,
+      "created": "2025-11-03T16:27:26Z",
+      "path": "CLAUDE.md",
+      "in_reply_to": 2487035696,
+      "body": "In terms of the language, if you're referring to the use of the word `app`, that is deliberate. I think we should talk about it. The word \"service\" is extremely overloaded both generally in software engineering and in our codebase. In oak Java world, a service was:\r\n* an app that we deploy\r\n* a gRPC service in protobufs\r\n* a guy who initializes the connection to spanner -- SpannerService.java, (and others like that)\r\n* a guy who implements a gRPC service\r\n\r\nAt times, it was too confusing for AI to understand which service is being referred in the prompt. The situation worsened by the naming of one of our gRPC services: `IrisflowService`. So if you say \"add something to irislfow serivce\" it literally means 2 different things depending on what AI finds first.\r\n\r\nSo for Java, the decision was to rename everything except gRPC services, because unfortunately that's the part of the protobuf defintion language, we can't take it out:\r\n\r\n```protobuf\r\nservice IrisService {\r\n  /* Internal API for Aether UI */\r\n  rpc CreateJob(CreateJobRequest) returns (CreateJobResponse);\r\n<...>\r\n```\r\n\r\nSo our microservices became \"apps\" and our Spanner-, ES- and alike services became \"nuts\"",
+      "score": 85
+    },
+    {
+      "id": 1345519088,
+      "pr": 989,
+      "own_pr": false,
+      "created": "2023-10-04T09:47:26Z",
+      "path": "iris/jobs/apexdata/src/test/java/nutshell/iris/apexdata/ApexDataCollectorJobTest.java",
+      "in_reply_to": 1345071846,
+      "body": "I don't understand what problem we are solving here and I don't understand why less unit-tests is better than more unit-tests. These changes do not improve understanding of which component produces faulty output: the same protobuf diff can be produced by a bug in ingest and by a bug in data collector. \r\n\r\nWe already spent like 30 minutes discussing it and agreed to keep tests intact, yet you spend even more time trying to fix something that doesn't need fixing. \r\n\r\n> There is still a concern of modularity: is this unit testing a module and what is the module?\r\n\r\nWhat can be so concerning about a valid, legit unit-test? It is just a test, it checks that stuff is as expected. I want to be sure that the archive which data collector produces is correct. Period. That's the only thing that matters. The rest is phylosophy.\r\n\r\nMy proposal is to shift our focus from something that doesn't need fixing to something that helps us move forward with apex ingest",
+      "score": 85
+    },
+    {
+      "id": 2335878889,
+      "pr": 10862,
+      "own_pr": false,
+      "created": "2025-09-10T07:48:59Z",
+      "path": "Makefile",
+      "in_reply_to": null,
+      "body": "This is cool, but also, what should I do?\n```\n% make build\n❌ Node version mismatch\n   Expected: 18.20.8 (from package.json)\n   Found:    18.20.5\nmake: *** [check-tools] Error 1\n```\n\nOkay, let me fix that:\n```\n% which node\n/opt/homebrew/opt/node@18/bin/node\n% brew install node@18.20.8\nWarning: No available formula with the name \"node@18.20.8\". Did you mean node@20?\n\nTo install node@20, run:\n  brew install node@20\n```\n\nI guess I am stuck? \n\nThis is exactly why we used to have `bazel`, it homogenizes the experience for everyone. Yes, you spend time setting things up, but it's time that one individual spends and then the whole team can work, now it'll be the opposite, every single individual on the team will spend the same amount of time setting things up and trying to keep up with updates.",
+      "score": 85
+    },
+    {
+      "id": 3226299918,
+      "pr": 16680,
+      "own_pr": false,
+      "created": "2026-05-12T12:19:19Z",
+      "path": "_proposals/IRIS-4032-atomic-ftp-integration.md",
+      "in_reply_to": null,
+      "body": "By the way, I would _NOT_ make `secrets_prefix`, `sftp_host`, etc, part of the `SftpCopyCommand`. \n\nThe original idea of `sftpbridge` is that it's literally a 1:1 bridge between _a_ sftp server and _a_ GCS bucket.\n\nSo if we had 3 SFTP servers that we needed to interact with, we should've had 3 different SFTP bridges deployed. Deploying services is cheap, and it makes a very clear separation of concerns:\n* `irisflow` should _not_ know anything about SFTP configuration\n* but an instance of `sfptbridge` knows all about that \n\n`SftpPollCommand` was a later addition to the `sftpbridge` and the implementation assumed that we'll have 1 instance that polls for many different SFTPs, which I don't think is right.",
+      "score": 85
+    },
+    {
+      "id": 2896835251,
+      "pr": 15286,
+      "own_pr": false,
+      "created": "2026-03-06T16:55:57Z",
+      "path": "docs/proposals/20260305_axe_twirp_from_oak.md",
+      "in_reply_to": null,
+      "body": "Same here, I would've just written:\r\n\r\n> 4. Make sure to update all the relevant tests to use gRPC\r\n\r\nThat's it. I don't want to give it a list, just because I may not know it and / or I don't want to waste my time looking for all the test classes. Why would I? Plus again, it may force LLM to limit its own research. What if you didn't find some test that might need an update?\r\n\r\nIn your case it is useful, because you're learning and now you know like \"a-ha, here are some tests that should be also updated\", but you need to use this knowledge not in the prompt / proposal, but during the review process when you'll check if LLM actually found the tests that you've found and actually did the right thing.",
+      "score": 85
+    },
+    {
+      "id": 2925504119,
+      "pr": 15411,
+      "own_pr": false,
+      "created": "2026-03-12T15:30:55Z",
+      "path": "docs/proposals/20260311_data_collector_output.md",
+      "in_reply_to": null,
+      "body": "What is unclear here is how exactly can I tell or control which form types are to be submitted during this run? If there's going to be a parameter (or experiment), then it might as well be propagate to and used in `UsTaxSubmissionWorkflow` itself, right? \n\nWhat do we exactly gain by making it separate and running N times against the same data? \n\nI _actually_ want to do exact opposite for M1, I just want one query per doc type. See my answer in my \"non proposal\" PR. I find it extremely powerful that BQ can just give you everything you need at once.",
+      "score": 85
+    },
+    {
+      "id": 1836529866,
+      "pr": 6943,
+      "own_pr": false,
+      "created": "2024-11-11T11:31:05Z",
+      "path": "shared/lib/polyflow/src/test/java/nutshell/shared/polyflow/PolyflowRemoteExecutionTest.java",
+      "in_reply_to": null,
+      "body": "What is the reason to `extends HeavyNode`? When you build class hierarchies, there should be an idea behind that: like the classes in the same hierarchy share some common behavior and:\r\n* generally can be used interchangeably, \r\n* or work with different objects in the same way,\r\n* or just save you trouble copy-pasting a ton of code.\r\n\r\nNeither of the above applies here, the only thing that is common between these two is that their `weight()` is `HEAVY`, but that is not good enough reason for inheritance.",
+      "score": 85
+    },
+    {
+      "id": 2335693695,
+      "pr": 10831,
+      "own_pr": false,
+      "created": "2025-09-10T06:30:29Z",
+      "path": "iris/service/irisflow/src/main/java/nutshell/iris/irisflow/polyflow/costbasis/CostBasisJobNode.java",
+      "in_reply_to": 2330275110,
+      "body": "> at current num workers, dataflow is breaking a sweat\r\n\r\nI personally don't see this on this graph, what I see is that there is a saddle that indicates that we are IO bound from 10:13pm till 10:25-ish pm, where Spanner _does_ break a sweat, raising the transaction latency dramatically. You shouldn't look at Spanner's CPU to understand if it is working hard, in this particular case it just waits on the locks to be released, it is just idling and stuff is not CPU intensive. \r\n\r\nWhat you _should_ look at is raising transaction latency. Here's the graph from the same timeframe as your screenshot above (your 10pm is my 7am):\r\n<img width=\"772\" height=\"412\" alt=\"Screenshot 2025-09-10 at 08 09 44\" src=\"https://github.com/user-attachments/assets/fe668a64-382b-4c60-92b8-d864f11de755\" />\r\n\r\nSo what will happen when you raise the number of workers is:\r\n* each worker (and consequentially each worker's thread) will get to process smaller portion of data\r\n* number of transactions sent to spanner will increase\r\n* at the same time, obviously there will be _less data_ in each transaction\r\n* which may and will contribute to a (maybe dramatic) increase in lock contention\r\n\r\n> I think it's a mistake to hard-code this\r\n\r\nI don't necessarily agree with this.\r\n\r\nFirst, these particular hardcoded values are not random, I've picked them precisely because I did a ton of experimentation and came up with what I've found to be an optimum combination (I spent the whole week doing this if you remember). See my reasoning above.\r\n\r\nIn my experience, for each job type, there's always local minimums in terms of runtime vs (dataset size, num threads, num workers). And this graph is _COMPLEX_. And just throwing in more workers, counter-intuitively doesn't necessary make things faster.\r\n\r\nWhat I am saying is that I am not against experiments, you have plenty of options to do so:\r\n* you can build your custom `irisflow` build with these things being configurable and deploy to dev-cf (or even to demo by updating YAML)\r\n* even better I think, you can just start dataflow jobs via API directly (there are scripts for manual run in the repo)\r\n\r\nWhat I am against is this being easily tweak-able, because it will have consequences. I don't know if you remember but we bumped a number of workers for all jobs several months ago \"just to speed things up, because why not\" and it did speed things up just a little for M1. I was worried about Demo numbers but we proceeded anyway. \r\n\r\nGuess what happened next? Danny didn't like new cost numbers and we now manually tweak DCUs prior to each demo.",
+      "score": 84
+    },
+    {
+      "id": 1426537779,
+      "pr": 1675,
+      "own_pr": true,
+      "created": "2023-12-14T10:33:31Z",
+      "path": "iris/authz/authz.yaml",
+      "in_reply_to": 1424743989,
+      "body": "I had an afterthought on that. You said \"less error-prone\", but less error-prone in what sense? \r\n1. My priority in this particular config's design language is \"safety\" over \"user-friendliness\" in any sense. I also prefer verbosity over convenience, because\r\n2. Having wildcards of any sort in permissions configuration is extremely dangerous. I'd rather prefer permission config to be verbose than to end up in a situation where somebody had `foo.{*-delete}` but then we added `foo.delete_all` action and all of a sudden our operators can delete not one job but all at once.\r\n3. Yes, listing all the permissions except one is inconvenient. But that is a fair price to pay when you add new available action the object. If you want some roles to inherit this new action, you also have to add those explicitly.\r\n4. The only exception to that is `admin` role but again I'd prefer something like a special property which I have here, or maybe a keyword like\r\n    ```\r\n    - name: admin\r\n    - permissions\r\n       - ALL\r\n    ```\r\n    if you want more consistency. Otherwise `*.*` kind of suggest that you can `foo.*` but that is exactly what I don't want to have.",
+      "score": 84
+    },
+    {
+      "id": 3601480643,
+      "pr": 18027,
+      "own_pr": false,
+      "created": "2026-07-17T08:10:12Z",
+      "path": "go/job/iris/conveyor/pfi_ingest_seed/seed.go",
+      "in_reply_to": null,
+      "body": "Dude this completely messes up repo structure and violates 100% of conventions that we have in the repo.\n\nEach job must have its own folder `go/job/iris/pfi_ingest` if you wanted to, why nest it into conveyor? \n`go/job/iris/conveyor` -- is a HEAVY node polyflow executor, that is it, leave it alone!\n\nThen WTF is `cmd`. We don't do that in oak. Your job must have its own config that is defined as Oak's config, it must instantiate a job manager with all the required Nuts (if you write to GCS storage, you MUST USE StorageNut, etc).\n\n----------------\n\nOn top of that... you don't need _any of that_. What you needed to do is to generate the files you need, put them into the repo, and then write a simple script that is called by Tiltfile to move it to the required bucket. \n\nThen for this to work in CI, integration test should import them as resources and ensure that those files are in the bucket (they will always be there in localdev because of tiltfile, and they will never be there in CI). If not, it should copy them over there",
+      "score": 84
+    },
+    {
+      "id": 2946362020,
+      "pr": 15467,
+      "own_pr": false,
+      "created": "2026-03-17T12:16:15Z",
+      "path": "docs/proposals/20260316_rustgen_transform.md",
+      "in_reply_to": null,
+      "body": "It's interesting because my intuition is the opposite. It's just my opinion, by the way, you don't have to make any changes, but my gut feeling is the opposite.\n\nI would say, the only thing we are interested in is what `transform()` outputs. Leaf functions are implementation details, of course if they are complex they deserve its own test, but how do you know that your leaf function _is_ actually called? And that it is actually called in the right moment with the right data?\n\nAnother thing is that if we have a collection of \"input, expectation\" pair of protobufs (stored in plain JSON as resources) that describe all the possible use-cases, it'll be extremely powerful in a way that we can:\n* reuse them in docgen dev tool to see how document looks like in various scenarios\n* reuse them directly, if we decide to move the transform code out of Rust and into Java / Go (as we discussed earlier)\n* actually see that transform does the right thing and call all the right \"leaf functions\" \n\n",
+      "score": 84
+    },
+    {
+      "id": 3682908443,
+      "pr": 18283,
+      "own_pr": false,
+      "created": "2026-07-30T13:07:23Z",
+      "path": "go/lib/iris/versioning/staging_test.go",
+      "in_reply_to": null,
+      "body": "I see that all of that here is just a series of unit-tests that test some particular functions. What I don't see is where these functions are stitched together in a single happy-path test?\n\nYou don't need polyflow workflow to replicate what is going to happen, right?\n\nThere are some building blocks here defined as separate files `comparator.go`, `join.go`, `foo.go` etc. Great. I can't wrap my head around about who's owning what and who's calling who. \n\nAnd the reason for that is that there's no test that literally:\n* initializes with a bunch of data sitting in a data-collector-output-bucket\n* calling <foo.go>'s `DoFoo` method\n* then calling <bar.go>'s `DoBar` method\n* then finally producing the output for Sync to consume using <qux.go>'s `DoQux` method\n\nIt should be a fairly straightforward like 150-200 LOC (bar test-data) test, which immediately would've explained anyone who's reading this how things are supposed to work. \n\nIn other words, where's library's entry point?",
+      "score": 84
+    },
+    {
+      "id": 2889643938,
+      "pr": 15242,
+      "own_pr": false,
+      "created": "2026-03-05T12:17:44Z",
+      "path": "docs/proposals/20260303_state_tax_filing.md",
+      "in_reply_to": null,
+      "body": "I wrote above that clear references to proto files help, but interestingly enough, being strict and rigid with references to _source files_ may backfire in some situations.\n\nUsually, Codex is quite good at following repo patterns, so if you just add \"Please strictly follow repo patterns and conventions\" to the very end of your prompt, you usually can avoid being overly specific in terms of \"which code put after which line\", you know.\n\nMaybe this example is trivial and you're 100% right here, but generally it may as well happen that `jobs.go` is suddenly not the best place to implement this logic? You know? And if it is, Codex will find it anyway.\n\nSo I would just say:\n> implement go endpoint handler using the same pattern as start artifact delivery _(you can even be loose with references, it will find the right thing)_:\n> * validate blah\n> * validate foo\n> * etc",
+      "score": 84
+    },
+    {
+      "id": 2071291162,
+      "pr": 9253,
+      "own_pr": false,
+      "created": "2025-05-02T08:40:00Z",
+      "path": "iris/proto/nutshell/iris/proto/iris.proto",
+      "in_reply_to": null,
+      "body": "I think this is not a right decision here. This is a backend API, it does not necessarily need to reflect what is going on on the UI 1:1. Because UI can (and will) easily change later, but backend should remain the same. \r\n\r\nAgain, this just introduces a potential tech debt as logos and colors are clearly template specific, also:\r\n* What if trade confirm has larger logo than brokerage statement? \r\n* What if credit card statement has 3 different colors in its \"theme\"?\r\n\r\nNot only this API change makes things more confusing, and again introduces a potential tech debt, it makes config resolution extremely difficult if any of those questions above are answered \"YES\" as you need to write a ton of code manually to support all those use cases.",
+      "score": 84
+    },
+    {
+      "id": 1597938960,
+      "pr": 3325,
+      "own_pr": false,
+      "created": "2024-05-13T06:30:39Z",
+      "path": "iris/jobs/ingest/src/main/java/nutshell/iris/ingest/csv/m1/Activities.java",
+      "in_reply_to": 1596357491,
+      "body": "> This one came up because of a validation that checks the starting balance + activities = ending balance. \r\n\r\nBut that is exactly my whole point.\r\n1. We brought more data in\r\n2. This data landed on the dates we were testing, so we started to produce more output\r\n3. We started to get test failures because this new output is not covered by our assertions\r\n\r\nI want steps [1] and [3] to be fully decoupled. We should be able to bring a lot more data in and our test framework should be designed in a way that it by default only tests things we _want to test_, not all the things that appear in the output.\r\n\r\n> So I wouldn't call this a breaking change.\r\n\r\nJust changing CSV \"schema\" is a breaking change, generally speaking.",
+      "score": 84
+    },
+    {
+      "id": 2491425631,
+      "pr": 12114,
+      "own_pr": false,
+      "created": "2025-11-04T17:23:30Z",
+      "path": "java/dataflow/iris/ingest/src/main/java/nutshell/iris/ingest/transform/reader/m1/M1CreditCardStatement.java",
+      "in_reply_to": 2488957839,
+      "body": "I will approve because I think we want that to be shipped ASAP, but my point was rather that if you change a piece of production code and your tests didn't break, your test coverage is insufficient. \n\nI assume our test cases have exactly 2 balance entries that's why they pass either way, but still a food for thought.",
+      "score": 84
+    },
+    {
+      "id": 1798892367,
+      "pr": 6596,
+      "own_pr": true,
+      "created": "2024-10-14T07:27:54Z",
+      "path": "shared/lib/polyflow/src/main/java/nutshell/shared/polyflow/plugin/AsyncExecutionPlugin.java",
+      "in_reply_to": 1797193596,
+      "body": "> no need to introduce new concepts of remote-execution and async; we can lean on the existing concept of long-running\r\n\r\nNot sure what you mean here: the concept of long-running does not exist in `polyflow`. I may be wrong, but by also noting your previous comment (\"do we only need this for test?\") it feels like that you're looking at this PR and thinking `iris`, but in reality we probably should think `lib/polyflow`.\r\n\r\nSo if we look at the problem from this new angle, forgetting about `iris`, `aria`, etc for a second, polyflow is very straightforward as a lib:\r\n* it always have full workflow loaded into memory\r\n* it executes nodes one by one, sequentially and synchronously.\r\n\r\nIn other words, when you call `workflow.execute()`, your thread is blocked, not even blocked but your thread _is_ the thread that is doing the work, so the execution is always synchronous. Since we now recognize that, the concept of async execution, i.e in calling `workflow.execute()` and having _somebody else_ to actually do the job, makes sense right? \r\n\r\n(I am not saying here btw that the abstractions that I introduced here are sane, that's something I am not confident about, but I think the concept of \"async execution of a polyflow workflow\" totally makes sense from the library standpoint.)\r\n\r\nIn my view, polyflow should be abstract enough to not care what async execution means: \r\n* it may also literally mean \"execute in that ScheduledExecutor\" or something, if we're not in GCP but in pure Kubernetes like we were with NFTs,\r\n* \"execute asynchronously in GCP/AWS\" may also mean different things, like you may want to send a pub/sub message to a worker service\r\n\r\nbut it provides a \"plug-n-play\" framework to enable that behavior: create a subclass of `AsyncExecutionPlugin` and fill in the gaps.\r\n\r\n> It occurs to me that maybe your `weight` idea came from the idea that a node might prefer to determine whether it should be run locally at runtime. If that's right, my first thought is YAGNI,\r\n\r\nFun fact: we _already_ have that 😄 Document story executes in `irisflow` if it doesn't need to unzip the input. So yeah I had that in mind when I introduced weight. Some other (potential) examples: \r\n* deliveries; if your \"limit\" value is less than 100 or even 1000, why bother creating a cloud run job? \r\n* docgen! If you have less than 1000 docs, why bother with Dataflow?\r\n\r\nThe reason I preferred a number instead of a boolean was the opportunity to do stuff in stages. Like 10 docs job executes synchronously (fastest option), 100 docs job sends pubsub message to \"mockman\" (or whatever), 10000 docs goes to cloud run and >10k goes to Dataflow proper, or something along those lines.\r\n\r\nNot saying that's something we immediately (or at all) want, but that was my thinking. Considering that we talked about docgen doing something like that before (like we wanted to have a job preview or whatever), it is nice to have a library support for such behavior, relieving each particular node implementation of the details of that: just tell me how \"heavy\" you are!",
+      "score": 83
+    },
+    {
+      "id": 2392255152,
+      "pr": 11297,
+      "own_pr": false,
+      "created": "2025-09-30T16:53:30Z",
+      "path": "java/job/iris/delivery/src/main/java/nutshell/iris/delivery/email/SendGridApi.java",
+      "in_reply_to": 2392208467,
+      "body": "Oh yeah, it's an external API for sure, but we have numerous examples in the unit-test where we setup `RpcServer` to emulate the external APIs (from Mailjet to Gcs) and can actually test a ton of various edge cases not only happy path.\n\nFor example, `nutshell.iris.irisflow.polyflow.RetentionWorkflowTest` currently sets and validates everything only against Mailjet, I can't see the reason why this test shouldn't have a parameterized method source with both and test accordingly. Running just that will take 1 second to verify that stuff works vs starting up localdev and testing.\n\nAlso, on a side note, we should enable sendgrid in CI, otherwise currently `main` builds actually succeed whereas e2e-tests in dev fails. Again, it's just about test pyramid. We should target catching the errors earlier in the devloop, not after everything was deployed to dev.",
+      "score": 83
+    },
+    {
+      "id": 2916979947,
+      "pr": 15353,
+      "own_pr": false,
+      "created": "2026-03-11T09:20:06Z",
+      "path": "java/dataflow/iris/ingest/src/test/java/nutshell/iris/ingest/transform/reader/m1/M1Assertions.java",
+      "in_reply_to": null,
+      "body": "This test doesn't test anything right? \n\nBefore the change, the presentation was digital for everyone _and_ it needed to be filled, so the original assertion made sense.\n \nWith this change, the expectations of having print or digital is now data driven. Therefore it should become part of the *TestCase files that we have where each account should asserted on print presentation if it has a print indicator in the incoming data.\n\nOtherwise:\n* if we have bug that assigns \"digital\" to everyone, this test passes\n* if we have bug that assigns \"digital\" to accounts with print indicator, this test passes\n* if we have bug that assigns \"print\" to accounts without print indicator, this test passes\n\nIn other words, as I already said, practically this test doesn't test anything at all.",
+      "score": 83
+    },
+    {
+      "id": 1893657352,
+      "pr": 7548,
+      "own_pr": false,
+      "created": "2024-12-20T08:58:28Z",
+      "path": "iris/proto/nutshell/iris/proto/irisflow_reports.proto",
+      "in_reply_to": null,
+      "body": "This is an immediate \"NOPE\" 😄 \r\nThis is a huge security risk. We don't want to expose API endpoints that can grab random data from a random folder in GCS. If you want to download a report, refer to a report ID instead.",
+      "score": 83
+    },
+    {
+      "id": 3493471589,
+      "pr": 17631,
+      "own_pr": false,
+      "created": "2026-06-29T17:11:31Z",
+      "path": "go/tools/shared/bump_codegen/templates/BumpImpl.java.tmpl",
+      "in_reply_to": null,
+      "body": "I don't think this is right... Batch ID is an internal Bump concept, outside caller doesn't know or care about this batch ID.\n\nSo here's I think how it should look like (in pseudo-code, note that \"context switching\" is visualized using indentation, i.e switch from user code to library code to reciever code, etc):\n```java\n\n// caller, user code\nvar service = BumpServiceFoo.newBlockingStub(grpcChannel); // same as normal grpc init, like in IntegrationTestBase\nvar sink = service.submitBlah(handleObserver);\n\n    // here, internally, the following happens under the hood\n    // caller, bump library code\n    var batch = BumpBatch.newInstance()....build();\n    var handle = internalBumpGrpcClient.initializeRequest(batch);\n\n        // reciever, bump library code, initializeRequest gRPC handler\n        var presignedUrl = <...>;\n        var handle = BumpHandle.newInstance().set....build();\n        return handle;\n\n    // back to caller, bump library code\n    var writeLocation = decodeHandler(handle);\n\n// caller, back to user code\nfor (var item ....) {\n    sink.onNext(item); // this here serializes and writes to writeLocation in the library\n}\nsink.onCompleted();\n\n    // caller, bump library code\n    // once onCompleted() is called, another gRPC is made to the reciever indicating that the transmission is done\n    handle = internalBumpGrpcClient.finalizeRequest(handle);\n\n        // reciever, bump library code, finalizeRequest gRPC handler\n        controlPlane.onRequest(handle);\n        // then Polyflow control plane impl creates workflow and returns\n    \n    // caller, back to library code\n    handleObserver.onNext(handle);\n    handleObserver.onCompleted();\n\n// caller, back to user code\nvar handle = handleObserver.get();\n// save it for future use\n\n```\n\nSimilar flow should happen for the read: each time you try to read, you pass a handle via internal gRPC and get back a proto message with the read location and read it from there internally, making it look like you're just reading from streaming gRPC",
+      "score": 82
+    },
+    {
+      "id": 1865489406,
+      "pr": 7294,
+      "own_pr": false,
+      "created": "2024-12-02T09:14:08Z",
+      "path": "iris/jobs/irisflow/src/main/java/nutshell/iris/irisflow/reports/JobCountDocs.java",
+      "in_reply_to": null,
+      "body": "Probably should be `private final static ...` and moved at the very top of the class.\r\n\r\nGenerally, we prefer the structure of a Java class to be as follows:\r\n```java\r\npublic class Foo {\r\n   // first: static members (first public then private)\r\n   public static final String FOO = \"foo\";\r\n\r\n   private static final String BAR = \"bar\";\r\n   \r\n   public static void baz() {\r\n      // then publicÎ static methods\r\n   }\r\n\r\n   // then private final members\r\n   private final String qux;\r\n   private final int abc;\r\n   \r\n   // then private mutable members\r\n   private boolean def;\r\n\r\n   public Foo() { \r\n      /* then constructor(s) */ \r\n   }\r\n\r\n   public void callMe() { \r\n      /* then public methods (aka API of the class) */\r\n   }\r\n\r\n   public void callMeToo() { \r\n      // <...>\r\n   }\r\n\r\n   private String helperMethod() {\r\n      /* then private helper methods */\r\n   }\r\n```\r\n\r\nNote that it is not a requirement or rule, it's more of a recommendation. \r\n\r\nEspecially when it comes to methods. For example, if the class is very big, like some RPC service implementation, it makes sense to keep related methods together, like `private String helperMethod()` methods closer to the place where they are used. Also, if you extend some `abstract class` you may want to override `protected abstract` methods immediately after the constructor, but before any public methods that you add after that, etc.\r\n\r\nFields (members), however, generally always stay on top.",
+      "score": 82
+    },
+    {
+      "id": 2634010613,
+      "pr": 13225,
+      "own_pr": false,
+      "created": "2025-12-19T07:25:22Z",
+      "path": "java/job/iris/fis/src/main/java/nutshell/iris/fis/FISDataCollector.java",
+      "in_reply_to": null,
+      "body": "I think this shouldn't be IngestJsonInput straight away here as it will require building the full DocGen request here which data collectors normally don't do.\n\nThe pattern that we try to employ usually is the following:\n* data collector queries/parses the raw client-provided data and transforms it into something that we have control of and passes it onto Ingest in a row-based format (either CSV, like M1 data or JSONL like CoinTracker data)\n* Ingest dataflow job consumes the input and maps it to the DocGen request and various auxiliary data producing IngestOutput proto\n* DocGen does its thing\n\nSo what I think we should do here is just to follow the footsteps of `CryptoDataCollector` that produces JSONL data in a format that maps directly to the protobuf `CoinTrackerInput`. This is basically the raw customer data turned into the shape that Ingest can easily work with.\n\nWe can do exactly the same here:\n* create a proto that matches 1 entry of `expected_canonical_output.json‎` (I guess `CNFDTL` is a single trade?) in `dataflow.proto`, make sure you replace `-` with `_` in json keys though in your parser so that proto can deserialize\n* output each entry as a json on a new line\n* after that we'll write a JsonReader on the Ingest side that will also group all the entries by account number and combines them into the Trade Confirm docgen request",
+      "score": 82
+    },
+    {
+      "id": 1214289686,
+      "pr": 352,
+      "own_pr": true,
+      "created": "2023-06-02T12:05:20Z",
+      "path": "shared/lib/byob/src/main/java/nutshell/shared/byob/messaging/MessagingFactoryCloudImpl.java",
+      "in_reply_to": null,
+      "body": "This is an inferior solution to prior version IMO:\r\n* Where did the argument that \"a new person on a project wants to see all possible options\" go? How can I learn how many transport types are out there?\r\n* In order to figure out all possible transport values, I would need to find every single `Channel` implementation and then map it to `MyProjectChannels` class (or vice versa). How is this \"not complex\"? \r\n* How do you then verify that all transport names are unique? Like `PubSubChannel` shares the same transport type value between different subclasses. Is it by design or mistake?\r\n* How do you then verify that the way message is decoded for each transport type is uniform? In other words, where is the guarantee that all implementations with the same transport type have exactly the same way of decoding their message?\r\n* And what if it is not true, what if you have transport `t1` for two different classes and they have different decode method? Is it a feature or is it a bug?\r\n\r\nI have a strong opinion, that the code became MUCH less obvious and a lot more complex. If there is a bug here anywhere, a completely new person will have a very hard time figuring out what is going wrong.",
+      "score": 82
+    },
+    {
+      "id": 2940092068,
+      "pr": 15410,
+      "own_pr": false,
+      "created": "2026-03-16T12:33:25Z",
+      "path": "java/job/iris/cointracker/src/main/java/nutshell/iris/cointracker/CoinTrackerDataCollector.java",
+      "in_reply_to": null,
+      "body": "This confuses me. \n\n* you see above that`getTaxFormsExport()` is only called from `TAX_FORMS_EXPORT` and `TAX_FORMS_EXPORT_TINM_DELTA_ONLY`, great\n* I navigate in and see another `switch` by the same two constants again, with `default ->` clause throwing an exception.\n\nIt looks something like this to me:\n```java\n/** Clean function. Can't crash. */\nint main() {\n    if (foo || bar) {\n        return doThis();\n    } else {\n        return doThat();\n    }\n}\n\n/** Suddenly, can crash if misused */\nint doThis() {\n    if (foo) {\n       return a;\n    } else if (bar) {\n       return b;\n    } else {\n       throw new IllegalStateException();\n    }\n}\n```\n\nNothing would throw exception in `main()`, but suddenly `doThis()` just happens to be implemented in a way that it is now possible to break the program by calling it from a wrong place.\n\nI don't think it's a great design if new code suddenly introduces more options for a program to end up in a wrong state.\n\nI think with this reorganization in place, just having each enum constant to override `prepareQuery` is the most readable version. You clearly see which CTEs are used in which mode and which filters are applied in which mode.",
+      "score": 82
+    },
+    {
+      "id": 2826191949,
+      "pr": 15028,
+      "own_pr": false,
+      "created": "2026-02-19T07:57:43Z",
+      "path": "ts/app/iris/aether/vite.config.ts",
+      "in_reply_to": null,
+      "body": "We shouldn't have explicit login / logout pages anymore.\nIt should work exactly the same way Admin UI does:\n* it auto-detects localdev / CI and injects a cookie with the roles pre-defined in the env config\n* in real env where we use IAP, it'll just use the token from the headers\n\nThe advantage of that approach is that we don't pollute APIs with test-only endpoints, because in real envs \"login / logout\" flows happen completely outside Iris (in GCIP or Keycloak).\n\nThe disadvantage is that it is _slightly_ more inconvenient to test roles locally:\n* you go to Tiltfile and update desired roles (it'll restart aether automatically once you update env vars)\n* you clean up the cookie in Chrome\n* you refresh the page\n\nI would argue that most of the time we don't actually change any roles, so most of the time we don't even notice that something has changed. And when we do need to test roles, it is totally worth a trade-off of spending extra 10 seconds or so on each role change.",
+      "score": 82
+    },
+    {
+      "id": 2745539411,
+      "pr": 14148,
+      "own_pr": false,
+      "created": "2026-01-30T10:09:01Z",
+      "path": "ts/app/iris/aether/package.json",
+      "in_reply_to": null,
+      "body": "_Trying to reply to your PR description RE: dependency choices, will leave a set of comments on `package.json` for that_\n\n`zod` -- I don't think we need it anymore, not in aether. We have 16 usages remaining, almost half of them are Docgen DevTool related, some other usages are env var config (which will move over to Golang, obviously), and I think there are also a couple of usages that are actually dead-code.\n\nReiterating my point here made in another PR:\n* destructively validating incoming responses from BE/BFF is a bad UX, i.e stuff like `response.foo ?? \"--\"` prevents UI from crashing/refusing to render if we get a bug or some kind of an old/bad data that is returned from BE\n* doing stuff like `response.foo ?? \"--\"` is super noisy and tedious to humans to work with, but no problem at all for AI",
+      "score": 82
+    },
+    {
+      "id": 2667957316,
+      "pr": 13415,
+      "own_pr": false,
+      "created": "2026-01-07T10:51:01Z",
+      "path": "java/polyflow/iris/src/main/java/nutshell/iris/ustax/polyflow/UsTaxTransmissionBuilder.java",
+      "in_reply_to": null,
+      "body": "The changes in this file are too significant to justify the test-only scenario, and also they now violate some invariants that are relied upon in the nodes further downstream, i.e we have exactly 1 record per submission, so the record id is always \"1\", etc.\n\nThis just makes the code inconsistent and too permissive which may and will lead to confusion and bugs, both from humans and AI.\n\nIf there's just 1 node that does all of that, why do we need to touch production code at all? We can just construct the XML directly from the test data without using transmission builder at all and call validations on top of that.\n\nNext question that I have is why do we need to use software for that at all? We can pass the test by manually constructing and sending the XML using the bash script, for example.",
+      "score": 82
+    },
+    {
+      "id": 2335830810,
+      "pr": 10862,
+      "own_pr": false,
+      "created": "2025-09-10T07:29:34Z",
+      "path": "iris/service/aether/BUILD.bazel",
+      "in_reply_to": null,
+      "body": "I have a _strong_ opinion that in a freshly checked out project `bazel build //...` should succeed.\nI think we should just check `openapi.json` into git. \n\nIf you make an FE change, it will show up changed yeah, so we'll just commit it again.\n\nMissing files just create unnecessary shenanigans both for localdev experience and CI, I think this is one of the factors that contributes to a dramatic increase of the build times in CI. Relying on a bazel being called from turbo, we have a high chance that bazel senses a change in an environment compared to previous runs from CI builder and it just flushes local caches and builds everything anew.",
+      "score": 82
+    },
+    {
+      "id": 1324147125,
+      "pr": 890,
+      "own_pr": false,
+      "created": "2023-09-13T08:14:46Z",
+      "path": "iris/service/irisflow/src/main/java/nutshell/iris/irisflow/service/IrisFlowService.java",
+      "in_reply_to": null,
+      "body": "**Change request:**\r\nThe transaction (or single statement? or what exactly the root cause?) size limit is an implementation detail of Spanner, so I don't think it should be exposed to the DAO user like this.\r\n\r\nIt also makes the signature of the method `int deleteAllByJob(String workflowId, int limit)` pretty confusing for the DAO user, like why would I want to delete N random docs from the workflow? It really doesn't make much sense, right? \r\n\r\nSo, these loops should go into the Spanner DAO and ideally should be executed within a context of a single transaction, but again I am not sure what is the exact limitation here.\r\n",
+      "score": 82
+    },
+    {
+      "id": 1858653789,
+      "pr": 7294,
+      "own_pr": false,
+      "created": "2024-11-26T14:34:36Z",
+      "path": "iris/jobs/irisflow/src/main/java/nutshell/iris/irisflow/reports/Report.java",
+      "in_reply_to": null,
+      "body": "I am super confused with this hierarchy. Every single method here exposes implementation details of how reporting works instead of concealing them behind a single simple entrypoint. This is how it should like:\r\n```java\r\ninterface Report {\r\n    record Output(String uri) {}\r\n\r\n    Output generateReport(ReportRequest request);\r\n    // or maybe even more straightforward\r\n    Output generateReport(Map<String, String> params);\r\n}\r\n```\r\nMaybe one day we conver `Report.Output` into a proto. Literally everything else must be hidden in the implementation.\r\n",
+      "score": 82
+    },
+    {
+      "id": 3309096893,
+      "pr": 17009,
+      "own_pr": false,
+      "created": "2026-05-27T07:13:10Z",
+      "path": "rs/app/iris/docgen/src/main.rs",
+      "in_reply_to": null,
+      "body": "You generally can't do that in Cloud Run.\n\nIn Cloud Run service, background threads like this won't work as expected by default, as your instance only gets execution time during the incoming HTTP (or HTTP/2) request processing. \n\nOnce your service responded, you're not given CPU anymore. Which means this background thread will pause and only \"wake up\" again once the new request arrives. \n\nMaybe it's OK? Maybe it's fine that it'll be \"at least each 30 seconds the cache is evicted\"?\n\nThere's also an option to allocate CPU constantly, which is obviously more expensive as once service woke up, it'll be billed even if 0 requests arrived. I think we should try not to do so unless we have to.\n\ncc @chrisfesler ",
+      "score": 81
+    },
+    {
+      "id": 2450679907,
+      "pr": 11862,
+      "own_pr": false,
+      "created": "2025-10-22T07:21:23Z",
+      "path": "java/nut/iris/src/main/java/nutshell/iris/gatewayhandler/nut/SendgridWebhookHandler.java",
+      "in_reply_to": null,
+      "body": "Tiny nit: I want us to be clear-er as a team about the `TODO`-s that we leave behind. To me, TODO is something that will be dealt with in a couple of days or maybe in a couple of weeks, like:\n* the work is coming, we know that, we don't have requirements yet,\n* whoever is going to implement that, will find this and they will get a hint, that is great\n\nHowever, in most places, our TODOs are a couple of years old. And mostly just confuse me when I see them. IDE highlights those and I am thinking \"Oh I need to address those if I can\" but most of the time I just can't.\n\nNot telling you to remove it, maybe just asking to be a bit more thoughtful.\n\n",
+      "score": 81
+    },
+    {
+      "id": 1570196490,
+      "pr": 3107,
+      "own_pr": false,
+      "created": "2024-04-18T07:53:53Z",
+      "path": "iris/jobs/migrations/src/main/resources/db/schema.sql",
+      "in_reply_to": 1568947131,
+      "body": "Hm. I think I have to disagree with this again, because our schema should reflect our intentions, and not workaround any pre-existing state. And our intention here is to have document type set at all times. Having it as nullable here, again, literally says \"yeah it is okay to not set document type\", which is not true. So we need to backfill it with something here.",
+      "score": 81
+    },
+    {
+      "id": 2905791227,
+      "pr": 15306,
+      "own_pr": false,
+      "created": "2026-03-09T14:27:56Z",
+      "path": "docs/proposals/20250305_ustax_workflows.md",
+      "in_reply_to": null,
+      "body": "Generally speaking, this may improve things a little but doesn't really solve a bigger picture problem.\n\nWe need to build a \"one level up\" abstraction in front of DocJobs.\nDocJob was forced to incorporate various pre-doc workflows like Data collectors (with Tax, it became even worse), even though DocJob should just get an input and produce documents.\n\n\"Data collection\" (including tax-related stuff) should be its own phase just like what Kim showed the other day.\n\nIn Iris, we should have a proper dashboard, some kind of a calendar view that shows you Last / Pending / Next documents or something, like in M1's case it's confirms and statements, in Tax's case we should've seen US Tax Documents 2025. Here's my \"noodles\" that I sent to Chris ~ a month ago:\n\n> I think it's a subproblem of a general problem that you wanted to solve: how do I know that doctype XYZ is done for YYYY-MM-DD?\n> Which I think brings us back to a \"Documents Calendar\" feature that should be some kind of a massive checklist or a set of checklist or whatever:\n> - yearly docs\n>    - tax this \n>    - tax that\n>    - pnl whatnot\n>- monthly docs\n>    - statement this\n>   - statement that\n>- daily docs\n>     - tc\n>- weird docs\n>      - whatever credit card uneven periods, etc\n>\n> I think for the initial approach for each of those sections we should have some kind of\n> - past docs (N each)\n> - current docs (last trading day for T&C, this month for Statement, last tax year, etc)\n> - next doc (1 doc each: next trading day, next moth statement, this tax year, etc)\n>\n> Each has status like:\n>\n> - pending\n> - in progress (meaning there is something that is NOT done)\n> - done (meaning nothing to do and is completed in full)\n>\n> The devil is in the details though, we only can rely on the certain workflows being in a certain state, so for example if \"follow up delivieries\" aka \"interested party deliveries\" is done for Brokerage Statement, that doesn't necessarily mean it was (a) correct (all emails didn't bounce or whatever), (b) complete (all emails that M1 wanted were actually included), etc. But I am not sure that it is generally possible to ensure that level of complete-correct validation. I am rather sure it is NOT possible. (edited) \n>\n> The more I think about it, the more I realize that THIS :arrow_up: should be our dashboard.\n>\n> A \"calendar\" view with TODO items for Today, Tomorrow, etc, just like normal calendar on our phones.\n>\n> It's easy to put trading calendar (or generally speaking, per doc type calendar) into config, right?\n> So you log in, let's say to M1 prod and see the dashboard, see your TODAYs plan on Feb 4th for instance:\n> \n> - trade confirm 3 Feb 2026 [ PENDING ]\n> - brokerage statement Jan 2026 [ PENDING ]\n>\n> So you see Brokerage Statement is the current doc and it is PENDING, you click in and you have all the operational options in front of you:\n>\n> :yellow_circle: preliminary document job - [START]\n> :white_circle: document job -   <-- no START because prelim job must be executed\n> :white_circle: e-deliveries\n> :white_circle: interested party deliveries\n> :white_circle: post deliveries\n>\n> Then Heather does a prelim job:\n>\n> :white_check_mark: preliminary document job - [VIEW]\n> :yellow_circle: document job [START]\n> :white_circle: e-deliveries\n> :white_circle: interested party deliveries\n> :white_circle: post deliveries\n> \n> And so forth. If things are manual or automated can be also guided by config, etc\n> With this:\n> - there's no clutter on the dashboard \n> - (there's still can be an In Progress tab of some sort just to monitor what's running), \n> - no need to delete jobs all the time, \n> - job's name doesn't matter anymore \n> - etc\n\n",
+      "score": 80
+    },
+    {
+      "id": 2839736838,
+      "pr": 15099,
+      "own_pr": false,
+      "created": "2026-02-23T09:05:59Z",
+      "path": "ts/app/iris/aether/src/api.ts",
+      "in_reply_to": null,
+      "body": "First, current open API gen is not \"artisanal\", well I guess if you can consider [OpenAPI Generator](https://github.com/OpenAPITools/openapi-generator) project with 26k stars, 7.5k forks and over 13k closed PRs aritsanal, then I won't object 😄 \n\nThe only \"artisanal\" part in it that I added on top is exactly because of this (see highlighted lines 7-10): I wanted to avoid having fully-qualified names in the codebase, because it's harder to read and quite ugly:\n* I extended the vanilla typescript fetch generator from OpenAPI Gen and made it \"package aware\" (see `PackageAwareTsFetchCodegen`), in other words I made it so that it properly sorts the `nutshell.iris.foo.Bar` proto into `nutshell/iris/foo/Bar.ts` file as opposed to having it like this `NutshellIrisFooBar`\n* then I added a post-processing script that just puts `index.ts` files in all those subpackages because it was easier to do so as a post-processing step instead of hacking OpenAPI generator further\n\nIf we remove both of those things, we'll get exactly the same result with 0 artisanal parts, but as I said, I think it's quite valuable to get rid of those FQN even though I know it can be solved at the import time:\n```\nimport type {\n  NutshellIrisProtoAetherSystemGetAuthStatusResponse as GetStatusResponse,\n  NutshellIrisProtoAetherSystemLogoutResponse as LogoutResponse,\n} from \"@/orval/gen/model\";\n```\n\nThe problem with ⬆️ is that it WILL generate friction with LLMs. LLMs will constantly \"forget\" to do so and will just import FQN because they don't give a shit. But we, humans, do, and I think it's important to have nice(er)-to-read codebase.\n\nP.S.: it's funny that I actually implemented this \"artisanal\" part on top just like a crowd-pleaser basically, because I thought that if I showed the shiny-new approach with ugly looking APIs, it will immediately be perceived as a \"regression\" compared to what we had with proto-ts, but turns out it doesn't bother anyone \n\nP.P.S: I still kind of believe that API object names that 100% match proto message names are of a great value (for both humans, and AI actually).",
+      "score": 80
+    },
+    {
+      "id": 1836532516,
+      "pr": 6943,
+      "own_pr": false,
+      "created": "2024-11-11T11:33:26Z",
+      "path": "shared/lib/polyflow/src/test/java/nutshell/shared/polyflow/PolyflowRemoteExecutionTest.java",
+      "in_reply_to": null,
+      "body": "`HeavyNode` class should remain the same. If you need another Node that behaves differently but is also heavy, create new class, there is nothing wrong with it. That's exactly why `protected` method `weight()` exists: any node can override this method and return anything it wants, there is no need to stuff everything into the same class hierarchy just because you want all those nodes to be `HEAVY`:\r\n\r\n```java\r\nclass A extends SimpleNode<Foo> {\r\n    @Override\r\n    public Weight weight(PolyflowExecContext ctx) {\r\n      return Weight.HEAVY;\r\n    }\r\n\r\n    public ExecutionResult doExecute(PolyflowExecContext ctx) {\r\n        return Foo.newBuilder().build();\r\n    }\r\n}\r\n\r\nclass B extends SimpleNode<Bar> {\r\n    @Override\r\n    public Weight weight(PolyflowExecContext ctx) {\r\n      return Weight.HEAVY;\r\n    }\r\n\r\n    public ExecutionResult doExecute(PolyflowExecContext ctx) {\r\n        return Bar.newBuilder().setBar(123456).build();\r\n    }\r\n}\r\n\r\nclass C extends SimpleNode<Baz> {\r\n    @Override\r\n    public Weight weight(PolyflowExecContext ctx) {\r\n      return Weight.HEAVY;\r\n    }\r\n\r\n    public ExecutionResult doExecute(PolyflowExecContext ctx) {\r\n        return Baz.newBuilder().setData(\"aaa\").build();\r\n    }\r\n}\r\n```\r\n\r\nall of the above is absolutely OK. \r\n\r\nIt is your test, it is your code, if you need something, just write it.",
+      "score": 80
+    },
+    {
+      "id": 1881698082,
+      "pr": 7591,
+      "own_pr": false,
+      "created": "2024-12-12T09:26:29Z",
+      "path": "iris/service/irisflow/src/main/java/nutshell/iris/irisflow/persistence/StatusMessagePolicyDaoSpanner.java",
+      "in_reply_to": null,
+      "body": "We should avoid the use of `.formatted()` against SQL queries, especially such complex SQL queries, because:\r\n* First, it can really mess up with special characters in the query itself.\r\n* Second, it makes it really much harder to understand what this query is doing\r\n* Third, it makes it hard to just copy and paste the query to run it in env to debug/investigate something\r\n\r\nIn this particular case, it's way better to introduce just one more CTE above `doc_with_warnings` as I showed you before:\r\n```java\r\nprivate static String ACTUAL_AFFECTED_DOCS = \"\"\"\r\nWITH affected_docs AS (\r\n  SELECT * \r\n  FROM document\r\n  WHERE job_id = @jobId AND status = 'STATUS_FAILED' AND deleted = false\r\n),\r\n\"\"\"\r\n\r\nprivate static String ORIGINAL_AFFECTED_DOCS = \"\"\"\r\nWITH affected_docs AS (\r\n  SELECT document.* \r\n  FROM status_message_policy_decision AS smpd\r\n  JOIN document \r\n    ON smpd.job_id = document.job_id AND smpd.document_id = document.id\r\n  WHERE smpd.job_id = @jobId AND document.deleted = false\r\n),\r\n\"\"\"\r\n```\r\n\r\nthen `doc_with_warnings` becomes:\r\n```sql\r\ndocs_with_warnings AS (\r\n  SELECT /* ... */\r\n  FROM\r\n    affected_docs,\r\n    UNNEST(/* ... */)\r\n),\r\n```\r\nand then it's just \r\n```java\r\nvar query = ORIGINAL_AFFECTED_DOCS + CTE + ...\r\n// or\r\nvar query = ACTUAL_AFFECTED_DOCS + CTE + ...\r\n```",
+      "score": 80
+    },
+    {
+      "id": 3512897799,
+      "pr": 17631,
+      "own_pr": false,
+      "created": "2026-07-02T12:11:50Z",
+      "path": "_proposals/IRIS-4149-bump-proposal.md",
+      "in_reply_to": null,
+      "body": "Naming things is hard. I am still confused what is \"request\" and what is \"batch\". I think they are the same thing.\n\nJust like with normal RPC, you make _a_ request and you get _a_ response. Here you make a batch of requests and you get back a batch of responses. This is my mental model.\n\nBy definition, a batch is just a group of things that are being acted upon together. \n\nIn this document, you're using the word batch as if it has input properties (request) and then gains output properties (responses), it doesn't fit my understanding of what batch is.\n\nMy undertanding:\n* client makes a batch of requests to server\n* server consumes this batch of requests all together, and eventually...\n* produces a batch of results, that client consumes all together\n\nThe word batch here is important because it is not possible to access partially neither partially produced batch of requests nor partially produced batch of results, that's why they are batches, not just some groups of things.\n\nAnd what is also important is that conceptually it is not one batch that is being mutated and augmented with results, it's just 2 different immutable batches: one is produced by a client, second is produced by a server.",
+      "score": 80
+    },
+    {
+      "id": 2265821060,
+      "pr": 10366,
+      "own_pr": false,
+      "created": "2025-08-11T06:43:29Z",
+      "path": "iris/tools/data-generator/datagen.py",
+      "in_reply_to": 2262123172,
+      "body": "(Adding a second comment just to separate the personal feedback from 🧠 ⚡ -ing)\n\nHere's what I think is happening:\n* When we run the container, it executes the python launcher script \n* This is the same python launcher script that we execute locally, which in theory should give us roughly the same results (bar environment, obviously, like the usage of `gsutil` previously was possible only locally) \n* Anyway, that script ultimately `cd`-s itself into `/iris/tools/data-generator/datagen_main.runfiles/_main/`, so we _should_ be in the position where `iris/tools/data-generator/top_250_stocks.csv` is just perfectly readable by our datagen python script\n* That is why I set this path as the default in `unified_datagen.py` and it DOES work locally, so datagen is able to find it via that path\n* My understanding is that in your tests in real environments that is NOT the case. I am absolutely puzzled why, but we should find out before we merge, because this is key. We must understand how our software works otherwise we're not in control.",
+      "score": 80
+    },
+    {
+      "id": 2039161302,
+      "pr": 8747,
+      "own_pr": true,
+      "created": "2025-04-11T09:21:26Z",
+      "path": "iris/service/irisflow/src/main/java/nutshell/iris/irisflow/persistence/CostBasisAccountDaoInMemory.java",
+      "in_reply_to": 2037977150,
+      "body": "I think you're summary is kind of spot on:\r\n> Probably depends on the # of usages, 1 test class can just use a spanner container and double as a service/dao test. If a dao is used in a bunch of places and we need to test a lot of business logic the InMemory version makes sense.\r\n\r\nWhen you need to test a bunch of specific use-cases you should do it in unit-tests, preferably without the use of any containers, as their runtime is order of magnitude faster. It may not be apparent if you're just working on a single test as current simulators are normally pretty quick (with the notable exception of Elasticsearch), but it certainly makes an impact on a CI runtime when all the (or just many) tests run at the same time.\r\n\r\nFor example, when you test new workflow and want to ensure that all edge-cases are covered, it will not only be faster to use InMemoryDao, but also convenient as you don't need to ensure that you comply with all the DB constraints like FKs, etc and because most of the time InMemoryDao-s are a lot more loose.",
+      "score": 80
+    },
+    {
+      "id": 2803812446,
+      "pr": 14717,
+      "own_pr": false,
+      "created": "2026-02-13T11:47:40Z",
+      "path": "java/nut/iris/src/main/java/nutshell/iris/ustax/nut/UsTaxReportingService.java",
+      "in_reply_to": null,
+      "body": "This looks a little odd.\r\n1. Why do we need tax year as a separate proto field if it's just a parameter? It should go to `ReportingRequest.putParams(...)`\r\n2. Then in `UsTaxReportingWorkflowDef.java` below, tax year should be passed as a parameter to the `BigQueryReportParams` and not used as substitution.\r\n3. Substitutions are env-dependent fixed variables like dataset names/project names/table names. Changing these require env restart / redeploy / etc.\r\n4. Parameters are something that vary from request to request, like job ids or dates or whatnot, and don't require environment restart. They should be passed as SQL parameters to a prepared statement, otherwise we're opening way for SQL injections.\r\n\r\nTL;DR: `tax_year` is just a parameter and should be set as parameter.",
+      "score": 80
+    },
+    {
+      "id": 1379596472,
+      "pr": 1161,
+      "own_pr": true,
+      "created": "2023-11-02T05:05:14Z",
+      "path": "iris/jobs/apexdata/src/main/java/nutshell/iris/apexdata/ApexDataCollector.java",
+      "in_reply_to": 1378852079,
+      "body": "It will fail the job, and should fail the job.\r\nI mean business date being null here is almost the same thing as account code being null, like it is not what can be in the database, there are no nulls in `business_date` column anywhere in BQ.\r\n\r\nAlso, we can apply the same logic of \"sql regression\" to other queries and cover everything with null checks, but we don't do it. I think null checks like this should only be there when nulls are expected (for instance, due to the nature of underlying data source which occasionally produces nulls), otherwise it gives the wrong impression, even though it is followed by `log.error`. Well yeah, error, and what? We still kind of expect it to happen, but this is not what I want to communicate here.",
+      "score": 80
+    },
+    {
+      "id": 2665223635,
+      "pr": 13392,
+      "own_pr": false,
+      "created": "2026-01-06T15:00:33Z",
+      "path": "java/polyflow/shared/src/main/java/nutshell/shared/polyflow/AbstractNode.java",
+      "in_reply_to": 2665020489,
+      "body": "So I did some research and now I see what you attempted to fix. \r\n\r\nSo first of all, the changes in Polyflow like this should ALWAYS be accompanied by the test. We can't afford making random fixes like this and hope for the best.\r\n\r\nSecondly, as I assumed above, this fix is masking a real bug that is in the constructor of `ExecutionResult`, which should look like this:\r\n```java\r\n    public ExecutionResult(NodeStatus newStatus) {\r\n      this.newStatus = newStatus;\r\n      var nodeProto = AbstractNode.this.protoRef.get();\r\n      this.newOutput = nodeProto.hasNodeOutput() ? nodeProto.getNodeOutput() : null;\r\n    }\r\n```\r\n\r\nPlease make this change and also add a test that verifies that AbstractNode doesn't set an empty `Any` on failure.",
+      "score": 80
+    },
+    {
+      "id": 2538584689,
+      "pr": 12379,
+      "own_pr": false,
+      "created": "2025-11-18T15:11:58Z",
+      "path": "java/testing/integration/iris/src/test/java/nutshell/iris/UspsSecureDestructionIntTest.java",
+      "in_reply_to": null,
+      "body": "This looks like a weird mockman API to me. \n\nIn my opinion, mockman should only have 1 endpoint called\n```\nPOST mock/epf/file/%FILE_ID%?fileName=%FILE_NAME%\nBody: %CONTENTS%\n```\nand then `mockman` should take care of mapping this into EPF API, and tracking its status (if it is read or not). \n\nOtherwise we expose EPF API to the integration test that actually doesn't care at all about what EPF API looks like, and if it changes, all of a sudden we have to change integration test which is on its own a problem.",
+      "score": 80
+    }
+  ]
+}

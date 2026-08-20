@@ -1,0 +1,30 @@
+version = 1
+
+# The shared Agent Skills path is the portable default. Keep one target for all
+# harnesses that support it to avoid duplicate discovery.
+[[targets]]
+id = "agents"
+name = "Shared Agent Skills"
+path = ".agents/skills"
+harnesses = [
+  "Codex",
+  "Cursor",
+  "Gemini CLI",
+  "GitHub Copilot",
+  "Goose",
+  "OpenCode",
+  "Windsurf",
+  "Zed",
+]
+
+[[targets]]
+id = "claude"
+name = "Claude Code"
+path = ".claude/skills"
+harnesses = ["Claude Code"]
+
+[[targets]]
+id = "cline"
+name = "Cline"
+path = ".cline/skills"
+harnesses = ["Cline"]

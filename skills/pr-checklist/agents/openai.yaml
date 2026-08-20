@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Checklist"
+  short_description: "Checklist-based pull request review helper"
+  default_prompt: "Use $pr-checklist to review my current branch changes."
